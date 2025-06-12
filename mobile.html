@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OKX 手機版圖表</title>
+  <link rel="stylesheet" href="style-mobile.css">
+  <script src="./js/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <input list="symbolList" id="symbolInput" placeholder="輸入幣種（如 BTCUSDT.P）" style="width: 100%; font-size: 18px; margin: 10px 0;">
+  <datalist id="symbolList"></datalist>
+
+  <div id="intervalButtons" style="display: flex; flex-wrap: wrap; gap: 4px;">
+    <button data-interval="15m">15m</button>
+    <button data-interval="30m">30m</button>
+    <button data-interval="1H" class="active">1H</button>
+    <button data-interval="2H">2H</button>
+    <button data-interval="4H">4H</button>
+    <button data-interval="6H">6H</button>
+  </div>
+
+  <div style="margin-top: 8px;">
+    <label style="color: white;">
+          <label><input type="checkbox" id="toggleOHLC" checked /> 顯示圖表值</label>
+    <label><input type="checkbox" id="toggleHA" /> 平均K線（Heikin-Ashi）</label>
+    </label>
+  </div>
+  <div id="haTableContainer" style="display:none;">
+    <h3 style="margin-bottom: 8px;">HA 動力判斷表（最近 10 根）</h3>
+    <table id="haTable">
+      <thead>
+        <tr>
+          <th>時間</th>
+          <th>方向</th>
+          <th>HA Body%</th>
+          <th>影線</th>
+          <th>分類</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="ohlcInfo" style="color: #ccc; font-size: 13px; margin-top: 4px;"></div>
+  <div id="chart" style="height: 320px;"></div>
+  <div id="statusText" style="text-align:center;">🔄 初始化中...</div>
+
+  <script type="module" src="js/mobile-main.js"></script>
+</body>
+</html>

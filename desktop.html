@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OKX 即時圖表工具</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./js/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body {
+      background-color: #111;
+      color: white;
+      font-family: "微軟正黑體", sans-serif;
+      padding: 16px;
+    }
+
+    input, button {
+      font-size: 14px;
+      margin: 4px;
+    }
+
+    #symbolInput {
+      padding: 6px;
+      width: 220px;
+    }
+
+    #statusText {
+      margin-top: 8px;
+      font-weight: bold;
+      color: #ffd700;
+    }
+
+    #intervalButtons {
+      margin: 12px 0;
+    }
+
+    #intervalButtons button {
+      margin-right: 6px;
+      padding: 6px 12px;
+      border: none;
+      background-color: #444;
+      color: white;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+
+    #intervalButtons button.active {
+      background-color: #26a69a;
+      color: black;
+    }
+
+    #ohlcInfo {
+      margin-top: 8px;
+      font-size: 14px;
+      color: #ccc;
+    }
+
+    #haTableContainer {
+      margin-top: 16px;
+    }
+
+    #haTable {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    #haTable th, #haTable td {
+      padding: 6px 8px;
+      text-align: center;
+      border-bottom: 1px solid #444;
+    }
+
+    #haTable tr:hover {
+      background-color: #222;
+    }
+
+    #chart {
+      margin-top: 20px;
+      height: 500px;
+    }
+
+    .checkbox-group {
+      margin-top: 12px;
+    }
+
+    .checkbox-group label {
+      margin-right: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <input list="symbolList" id="symbolInput" placeholder="輸入幣種（如 BTCUSDT.P）" />
+  <datalist id="symbolList"></datalist>
+
+  <div id="statusText">🔄 請選擇幣種...</div>
+
+  <div id="intervalButtons">
+    <button data-interval="15m">15m</button>
+    <button data-interval="30m">30m</button>
+    <button data-interval="1H" class="active">1H</button>
+    <button data-interval="2H">2H</button>
+    <button data-interval="4H">4H</button>
+    <button data-interval="6H">6H</button>
+  </div>
+
+  <div class="checkbox-group">
+    <label><input type="checkbox" id="toggleOHLC" checked /> 顯示圖表值</label>
+    <label><input type="checkbox" id="toggleHA" /> 平均K線（Heikin-Ashi）</label>
+  </div>
+
+  <div id="haTableContainer" style="display:none;">
+    <h3 style="margin-bottom: 8px;">HA 動力判斷表（最近 10 根）</h3>
+    <table id="haTable">
+      <thead>
+        <tr>
+          <th>時間</th>
+          <th>方向</th>
+          <th>HA Body%</th>
+          <th>影線</th>
+          <th>分類</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="ohlcInfo"></div>
+  <div id="chart"></div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
