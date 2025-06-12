@@ -13,7 +13,11 @@ function getPrecision(val) {
 }
 
 function convertToDisplaySymbol(instId) {
-  return instId;
+  return instId.replace("-USDT-SWAP", "USDT.P");
+}
+
+function convertToInstId(displaySymbol) {
+  return displaySymbol.replace("USDT.P", "-USDT-SWAP");
 }
 
 async function fetchSymbolList() {
@@ -26,30 +30,61 @@ async function fetchSymbolList() {
 }
 
 async function fetchKlines(instId, bar) {
-  const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=999999`;
-  const res = await fetch(url);
-  const json = await res.json();
-
-  return json.data.reverse().map(([ts, o, h, l, c]) => {
-    const end = Math.floor(ts / 1000);
-    let time = end;
-
-    if (bar === "6H") {
-      const twOffset = 8 * 3600;
-      const interval = 6 * 3600;
-      const twEnd = end + twOffset;
-      const aligned = Math.floor((twEnd - 8 * 3600) / interval) * interval + 8 * 3600;
-      time = aligned - twOffset;
-    }
-
-    return {
-      time,
+  if (bar !== '6H') {
+    const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${bar}&limit=300`;
+    const res = await fetch(url);
+    const json = await res.json();
+    return json.data.reverse().map(([ts, o, h, l, c]) => ({
+      time: Math.floor(ts / 1000),
       open: parseFloat(o),
       high: parseFloat(h),
       low: parseFloat(l),
       close: parseFloat(c)
-    };
-  });
+    }));
+  }
+
+  const url = `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=1H&limit=300`;
+  const res = await fetch(url);
+  const json = await res.json();
+  const oneHourCandles = json.data.reverse().map(([ts, o, h, l, c]) => ({
+    time: Math.floor(ts / 1000),
+    open: parseFloat(o),
+    high: parseFloat(h),
+    low: parseFloat(l),
+    close: parseFloat(c)
+  }));
+
+  const grouped = [];
+  for (let i = 0; i < oneHourCandles.length; i++) {
+    const candle = oneHourCandles[i];
+    const date = new Date(candle.time * 1000);
+    const utcHour = date.getUTCHours();
+    const alignedHour = utcHour - (utcHour % 6);
+    const alignedDate = new Date(Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      alignedHour
+    ));
+    const groupKey = alignedDate.getTime() / 1000;
+
+    if (!grouped.length || grouped[grouped.length - 1].time !== groupKey) {
+      grouped.push({
+        time: groupKey,
+        open: candle.open,
+        high: candle.high,
+        low: candle.low,
+        close: candle.close
+      });
+    } else {
+      const last = grouped[grouped.length - 1];
+      last.high = Math.max(last.high, candle.high);
+      last.low = Math.min(last.low, candle.low);
+      last.close = candle.close;
+    }
+  }
+
+  return grouped;
 }
 
 async function fetchLatestPrice(instId) {
@@ -62,7 +97,6 @@ async function fetchLatestPrice(instId) {
 export async function loadChart() {
   if (!currentSymbol) return;
   document.getElementById("statusText").innerText = "⏳ 載入中...";
-
   if (chart) chart.remove();
 
   chart = LightweightCharts.createChart(document.getElementById('chart'), {
@@ -96,43 +130,64 @@ export async function loadChart() {
     wickUpColor: '#26a69a', wickDownColor: '#ef5350'
   });
 
-  const candles = await fetchKlines(currentSymbol, currentInterval);
+  let candles = await fetchKlines(currentSymbol, currentInterval);
   if (!candles.length) {
     document.getElementById("statusText").innerText = "❌ 無法載入資料";
     return;
   }
 
+  const useHA = document.getElementById("toggleHA")?.checked;
+  if (useHA) {
+    const haCandles = [];
+    for (let i = 0; i < candles.length; i++) {
+      const prevHA = haCandles[i - 1] ?? candles[i];
+      const haClose = (candles[i].open + candles[i].high + candles[i].low + candles[i].close) / 4;
+      const haOpen = (prevHA.open + prevHA.close) / 2;
+      const haHigh = Math.max(candles[i].high, haOpen, haClose);
+      const haLow = Math.min(candles[i].low, haOpen, haClose);
+
+      haCandles.push({
+        time: candles[i].time,
+        open: haOpen,
+        high: haHigh,
+        low: haLow,
+        close: haClose
+      });
+    }
+    candles = haCandles;
+  }
+
   candleSeries.setData(candles);
   latestCandles = candles;
   lastCandleTime = candles[candles.length - 1].time;
-
-  document.getElementById("statusText").innerText = `✅ ${currentSymbol.replace("-USDT-SWAP", "USDT.P")} - ${currentInterval} 載入成功`;
-
+  document.getElementById("statusText").innerText = `✅ ${convertToDisplaySymbol(currentSymbol)} - ${currentInterval} 載入成功`;
   attachCrosshairInfo();
 }
 
 async function autoUpdatePrice() {
   if (!chart || !candleSeries || !currentSymbol) return;
+
   try {
     const price = await fetchLatestPrice(currentSymbol);
     const now = Math.floor(Date.now() / 1000);
+    const useHA = document.getElementById("toggleHA")?.checked;
 
-    if (lastCandleTime && latestCandles.length > 0) {
+    const isUp = latestCandles.length > 0 && price >= latestCandles[latestCandles.length - 1].open;
+    const color = isUp ? '#26a69a' : '#ef5350';
+
+    if (!lastPriceLine) {
+      lastPriceLine = chart.addLineSeries({
+        lineWidth: 0.1,
+        priceLineVisible: true,
+        lastValueVisible: true,
+        crossHairMarkerVisible: false
+      });
+    }
+    lastPriceLine.applyOptions({ color });
+    lastPriceLine.setData([{ time: now, value: price }]);
+
+    if (!useHA && lastCandleTime && latestCandles.length > 0) {
       const prev = latestCandles[latestCandles.length - 1];
-      const isUp = price >= prev.open;
-      const color = isUp ? '#26a69a' : '#ef5350';
-
-      if (!lastPriceLine) {
-        lastPriceLine = chart.addLineSeries({
-          lineWidth: 0.1,
-          priceLineVisible: true,
-          lastValueVisible: true,
-          crossHairMarkerVisible: false
-        });
-      }
-      lastPriceLine.applyOptions({ color });
-      lastPriceLine.setData([{ time: now, value: price }]);
-
       const updated = {
         time: lastCandleTime,
         open: prev.open,
@@ -144,10 +199,12 @@ async function autoUpdatePrice() {
     }
 
     const precision = getPrecision(price);
-    document.getElementById("infoSymbol").innerText = currentSymbol;
+    document.getElementById("infoSymbol").innerText = convertToDisplaySymbol(currentSymbol);
     document.getElementById("infoPrice").innerText = `價格：${price.toFixed(precision)}`;
     document.getElementById("infoTime").innerText = new Date().toLocaleTimeString();
-  } catch (err) {}
+  } catch (err) {
+    console.error("❌ 更新價格錯誤：", err);
+  }
 }
 
 function attachCrosshairInfo() {
@@ -157,7 +214,6 @@ function attachCrosshairInfo() {
     const ohlcDiv = document.getElementById("ohlcInfo");
     const checkbox = document.getElementById("toggleOHLC");
     if (!param || !param.time || !param.seriesData) return;
-
     if (!checkbox.checked) {
       ohlcDiv.innerHTML = "";
       return;
@@ -187,9 +243,13 @@ function attachCrosshairInfo() {
 function attachEventListeners() {
   document.getElementById("symbolInput").addEventListener("change", () => {
     let val = document.getElementById("symbolInput").value.trim().toUpperCase();
-    if (val.endsWith("USDT.P")) val = val.replace("USDT.P", "-USDT-SWAP");
+    if (val.endsWith("USDT.P")) val = convertToInstId(val);
     if (!val.endsWith("-USDT-SWAP")) return;
     currentSymbol = val;
+    loadChart();
+  });
+
+  document.getElementById("toggleHA").addEventListener("change", () => {
     loadChart();
   });
 
@@ -208,10 +268,14 @@ async function initSymbolList() {
   const datalist = document.getElementById("symbolList");
   list.forEach(symbol => {
     const opt = document.createElement("option");
-    opt.value = symbol.replace("-USDT-SWAP", "USDT.P");
+    opt.value = convertToDisplaySymbol(symbol);
     datalist.appendChild(opt);
   });
 }
+
+
+
+
 
 attachEventListeners();
 initSymbolList();
