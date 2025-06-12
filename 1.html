@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>OKX 即時K棒圖</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+    body {
+      font-family: "微軟正黑體", sans-serif;
+      padding: 20px;
+      background: #111;
+      color: #fff;
+    }
+    #controls {
+      margin-bottom: 16px;
+    }
+    input, select, button {
+      margin-right: 10px;
+      padding: 5px;
+    }
+    #realtimePrice {
+      font-size: 20px;
+      margin: 10px 0;
+      color: #0f0;
+    }
+    .active-button {
+      background-color: #0f0;
+      color: #000;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    幣種：
+    <input id="symbolInput" list="symbolList" placeholder="輸入幣種（如 BTCUSDT.P）" onchange="loadCandle()" />
+    <datalist id="symbolList"></datalist>
+
+    時間軸：
+    <button onclick="setIntervalBar('15m')" id="btn-15m">15分鐘</button>
+    <button onclick="setIntervalBar('1H')" id="btn-1H">1小時</button>
+    <button onclick="setIntervalBar('2H')" id="btn-2H">2小時</button>
+    <button onclick="setIntervalBar('4H')" id="btn-4H">4小時</button>
+    <button onclick="setIntervalBar('6H')" id="btn-6H">6小時</button>
+    <button onclick="setIntervalBar('1D')" id="btn-1D">1天</button>
+
+    <button onclick="toggleHa()">切換平均K線</button>
+    <button onclick="setToNormalCandle()">切換原始K線</button>
+  </div>
+
+  <div id="realtimePrice">⏳ 尚未載入價格</div>
+  <div id="chart" style="width:100%;height:600px;"></div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
