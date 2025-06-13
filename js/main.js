@@ -116,22 +116,28 @@ function detectCandlePatterns(candles, lookback = 10) {
 
 // === 智慧判讀：最後一根形態 + 理由 =========================
 function generateAISuggestion(candles, markers) {
-  if (!markers.length) return "目前無明顯蠟燭訊號，建議觀望。";
+  if (!candles.length) return "尚無價格資料";
 
-  // 取最接近收盤時間的一筆標記
+  // ── 0. 盤整偵測 ───────────────────────────
+  if (!markers.length) {
+    const last10 = candles.slice(-10);
+    const high10 = Math.max(...last10.map(c => c.high));
+    const low10  = Math.min(...last10.map(c => c.low));
+    const rangePct = ((high10 - low10) / low10) * 100;
+    if (rangePct < 1.2) return "📉 價格進入盤整，建議觀望。";
+    return "目前無明顯型態，建議觀察。";
+  }
+
+  // ── 1. 基本資訊 ───────────────────────────
   const lastMarker = markers.at(-1);
-  const pattern = lastMarker.text;
-  const timeStr = new Date(lastMarker.time * 1000)
-                    .toLocaleString("zh-TW", { hour12: false });
-
-  // 判斷多空傾向
-  const bullKeywords = ["多", "兵", "Hammer", "錘", "早晨", "三綠"];
-  const bearKeywords = ["空", "烏鴉", "流星", "墓", "黃昏", "三烏"];
+  const pattern  = lastMarker.text;
+  const timeStr  = new Date(lastMarker.time * 1000).toLocaleString("zh-TW", { hour12: false });
+  const bullKws  = ["多", "兵", "Hammer", "錘", "早晨", "三綠"];
+  const bearKws  = ["空", "烏鴉", "流星", "墓", "黃昏", "三烏"];
   let bias = "觀望";
-  if (bullKeywords.some(k => pattern.includes(k))) bias = "偏多";
-  else if (bearKeywords.some(k => pattern.includes(k))) bias = "偏空";
+  if (bullKws.some(k => pattern.includes(k))) bias = "偏多";
+  else if (bearKws.some(k => pattern.includes(k))) bias = "偏空";
 
-  // 形態→理由對照
   const reasonMap = {
     "多頭吞噬": "買盤蠶食前根空頭整體區間，常見強勢反轉。",
     "空頭吞噬": "賣壓完全包覆多頭實體，留意下跌延伸。",
@@ -144,8 +150,46 @@ function generateAISuggestion(candles, markers) {
   };
   const reason = reasonMap[pattern] ?? "常見反轉／續航形態出現，留意後續量價配合。";
 
-  return `最新 K 棒（${timeStr}）偵測到「${pattern}」，判斷：${bias}。\n原因：${reason}`;
+  // ── 2. 價格建議 ───────────────────────────
+  const lastCandle  = candles.at(-1);
+  const entryPrice  = lastCandle.close;
+  const precision   = getPrecision(entryPrice);
+  let  suggestion   = `🧠 最新 K 棒（${timeStr}）偵測到「${pattern}」，判斷：${bias}。\n📌 原因：${reason}`;
+
+  if (bias === "偏多" && candles.length > 2) {
+    const support = candles.at(-2).open;            // 取前一根 open 當支撐
+    const risk    = entryPrice - support;
+    const upPct   = (risk / support) * 100;
+
+    if (upPct > 4) {
+      suggestion += `\n⚠️ 已上漲 ${upPct.toFixed(2)}%，短線追高風險高，建議等待回踩。`;
+    } else {
+      const target = entryPrice + risk * 2;         // RR 1:2
+      suggestion += `\n✅ 建議買入價位：約 ${entryPrice.toFixed(precision)} ` +
+                    `\n   停損點：${support.toFixed(precision)} ` +
+                    `\n🎯 目標價：${target.toFixed(precision)}（RR 1:2）`;
+    }
+  }
+
+  if (bias === "偏空" && candles.length > 2) {
+    const resistance = candles.at(-2).open;         // 取前一根 open 當壓力
+    const risk       = resistance - entryPrice;
+    const downPct    = (risk / resistance) * 100;
+
+    if (downPct > 4) {
+      suggestion += `\n⚠️ 價格已急跌 ${downPct.toFixed(2)}%，不建議追空。`;
+    } else {
+      const target = entryPrice - risk * 2;         // RR 1:2
+      suggestion += `\n🔻 建議賣出價位：約 ${entryPrice.toFixed(precision)} ` +
+                    `\n   停損點：${resistance.toFixed(precision)} ` +
+                    `\n🎯 目標價：${target.toFixed(precision)}（RR 1:2）`;
+    }
+  }
+
+  return suggestion;
 }
+
+
 
 
 function getPrecision(val) {
