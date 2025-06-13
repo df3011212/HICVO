@@ -1,3 +1,5 @@
+
+
 // main.js 最上方加
 const isMobilePage = location.pathname.includes("mobile.html");
 const isDesktopPage = location.pathname.includes("desktop.html");
@@ -8,7 +10,7 @@ let chart, candleSeries, currentSymbol = "", currentInterval = "1H";
 let lastCandleTime = null;
 let latestCandles = [];
 let lastPriceLine = null;
-
+let tpLineObjects = [];
 
 
 // 直接覆蓋原本整段 -----------------------------
@@ -115,25 +117,31 @@ function detectCandlePatterns(candles, lookback = 10) {
 }
 
 // 將價格分箱以取得「密集度」—— step 代表箱寬 (預設 0.5% 價差)
-function getDenseLevels(prices, entryPrice, direction = "long", stepPct = 0.005) {
-  const step = entryPrice * stepPct;
-  const bins = {};
+// 取得高/低點的「密集度」分箱
+function getDenseLevels(prices, entryPrice, direction = "long", stepPct = 0.005, keep = 3) {
+  // 1️⃣ 安全檢查
+  if (!Array.isArray(prices) || !prices.length) return [];
+  if (!isFinite(entryPrice) || entryPrice <= 0) return [];
 
-  prices.forEach(p => {
-    // 只統計「上方壓力」或「下方支撐」
-    if (direction === "long" && p <= entryPrice) return;
-    if (direction === "short" && p >= entryPrice) return;
+  // 2️⃣ 算分箱寬度，防止 0 or NaN
+  const step = Math.max(entryPrice * stepPct, Number.EPSILON);
+  const bins = Object.create(null);
 
-    const key = Math.round(p / step) * step;   // 依 step 分箱
+  // 3️⃣ 建立分箱
+  for (const p of prices) {
+    if (direction === "long"  && p <= entryPrice) continue; // 只看上方壓力
+    if (direction === "short" && p >= entryPrice) continue; // 只看下方支撐
+    const key = Math.round(p / step) * step;               // 分箱
     bins[key] = (bins[key] || 0) + 1;
-  });
+  }
 
-  // 依次數排序取前三
+  // 4️⃣ 依出現頻率排序，取前 keep 個
   return Object.entries(bins)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)                 // 取 top3
+    .slice(0, keep)
     .map(([price, freq]) => ({ price: parseFloat(price), freq }));
 }
+
 
 // 方便格式化 TP 行
 function fmt(price, precision) {
@@ -146,7 +154,7 @@ function fmt(price, precision) {
 function generateAISuggestion(candles, markers) {
   if (!candles.length) return "尚無價格資料";
 
-  /* ——— 0. 盤整偵測 ——— */
+  /* 0. 盤整偵測 -------------------------------------------------- */
   if (!markers.length) {
     const last10 = candles.slice(-10);
     const hi = Math.max(...last10.map(c => c.high));
@@ -156,94 +164,84 @@ function generateAISuggestion(candles, markers) {
     return "目前無明顯型態，建議觀察。";
   }
 
-  /* ——— 1. 基本資訊 ——— */
+  /* 1. 基本資訊 -------------------------------------------------- */
   const lastMarker = markers.at(-1);
   const pattern = lastMarker.text;
-  const timeStr = new Date(lastMarker.time * 1000).toLocaleString("zh-TW", { hour12: false });
+  const timeStr = new Date(lastMarker.time * 1000)
+                    .toLocaleString("zh-TW", { hour12:false });
 
-  const bullKW = ["多", "兵", "Hammer", "錘", "早晨", "三綠"];
-  const bearKW = ["空", "烏鴉", "流星", "墓", "黃昏", "三烏"];
+  const bullKW = ["多","兵","Hammer","錘","早晨","三綠"];
+  const bearKW = ["空","烏鴉","流星","墓","黃昏","三烏"];
   let bias = "觀望";
   if (bullKW.some(k => pattern.includes(k))) bias = "偏多";
   else if (bearKW.some(k => pattern.includes(k))) bias = "偏空";
 
   const explain = {
-    "多頭吞噬": "買盤蠶食前根空頭整體區間，常見強勢反轉。",
-    "空頭吞噬": "賣壓完全包覆多頭實體，留意下跌延伸。",
-    "早晨之星": "連續空頭後出現星線＋長多方實體，可能見底反轉。",
-    "黃昏之星": "連續多頭後出現星線＋長空方實體，警示轉弱。",
-    "三綠兵":   "連三根長多方實體，動能續強。",
-    "三烏鴉":   "連三根長空方實體，動能續弱。",
-    "錘頭線":   "下影線顯著，低檔買盤撐盤跡象。",
-    "流星":     "上影線顯著，追高買盤乏力。"
+    "多頭吞噬":"買盤蠶食前根空頭，常見強勢反轉。",
+    "空頭吞噬":"賣壓包覆多頭，留意下跌延伸。",
+    "早晨之星":"連續空頭後出現星線＋多方實體，可能見底反轉。",
+    "黃昏之星":"連續多頭後出現星線＋空方實體，警示轉弱。",
+    "三綠兵":"連三根長多方實體，動能續強。",
+    "三烏鴉":"連三根長空方實體，動能續弱。",
+    "錘頭線":"下影線長，低檔買盤撐盤跡象。",
+    "流星":"上影線長，追高買盤乏力。"
   };
-  const reason = explain[pattern] ?? "常見反轉／續航形態出現，留意後續量價配合。";
+  const reason = explain[pattern] ?? "常見反轉／續航形態出現。";
 
-  /* ——— 2. 核心價格資料 ——— */
-  const lastCandle = candles.at(-1);
-  const entry = lastCandle.close;
+  /* 2. 價格 ------------------------------------------------------ */
+  const entry = candles.at(-1).close;
   const prec  = getPrecision(entry);
 
   let out = `🧠 最新 K 棒（${timeStr}）偵測到「${pattern}」，判斷：${bias}。\n📌 原因：${reason}`;
 
-  // 需要足夠歷史 K (≥220) 才做密集區統計
-  if (candles.length < 221) return out + "\n⚠️ 歷史資料不足，暫無出場建議。";
-
-  /* ——— 3. 多頭邏輯 ——— */
-  if (bias === "偏多") {
-    const support = candles.at(-2).open;
-    const risk = entry - support;
-    const upPct = (risk / support) * 100;
-
-    if (upPct > 4) {
-      return out + `\n⚠️ 已上漲 ${upPct.toFixed(2)}%，短線追高風險高，建議等待回踩。`;
-    }
-
-    // ‣ 取最近 220 根高點做密集區
-    const highs220 = candles.slice(-221, -1).map(c => c.high);
-    const dense = getDenseLevels(highs220, entry, "long"); // top3
-
-    // RR 目標
-    const tpRR = entry + risk * 2;
-
-    out += `\n✅ 建議買入價位：約 ${fmt(entry, prec)} ` +
-           `\n   停損點：${fmt(support, prec)} ` +
-           `\n🎯 分批目標價（出場區間）：`;
-
-    dense.forEach((d, idx) => {
-      out += `\n   ▸ TP${idx + 1}：${fmt(d.price, prec)}（高點密集 ${d.freq} 次）`;
-    });
-    out += `\n   ▸ TP${dense.length + 1}：${fmt(tpRR, prec)}（RR 1:2）`;
+  // 沒有足夠歷史
+  if (candles.length < 221) {
+    window.aiTpLines = [];
+    return out + "\n⚠️ 歷史資料不足，暫無出場建議。";
   }
 
-  /* ——— 4. 空頭邏輯 ——— */
-  if (bias === "偏空") {
-    const resistance = candles.at(-2).open;
-    const risk = resistance - entry;
-    const downPct = (risk / resistance) * 100;
+  /* 3. 生成 TP --------------------------------------------------- */
+  if (bias === "偏多" || bias === "偏空") {
+    const isLong  = bias === "偏多";
+    const refOpen = candles.at(-2).open;
+    const risk    = Math.abs(entry - refOpen);
+    const highsOrLows = isLong
+      ? candles.slice(-221, -1).map(c => c.high)
+      : candles.slice(-221, -1).map(c => c.low);
 
-    if (downPct > 4) {
-      return out + `\n⚠️ 價格已急跌 ${downPct.toFixed(2)}%，不建議追空。`;
-    }
+    const dense = getDenseLevels(
+      highsOrLows,
+      entry,
+      isLong ? "long" : "short"
+    );
 
-    // ‣ 取最近 220 根低點做密集區
-    const lows220 = candles.slice(-221, -1).map(c => c.low);
-    const dense = getDenseLevels(lows220, entry, "short"); // top3
+    const tpRR = isLong ? entry + risk * 2 : entry - risk * 2;
+    const stop = refOpen;
 
-    const tpRR = entry - risk * 2;
+    // --- 文字輸出 ---
+    out += isLong
+      ? `\n✅ 建議買入價位：約 ${entry.toFixed(prec)} `
+      : `\n🔻 建議賣出價位：約 ${entry.toFixed(prec)} `;
+    out += `\n   停損點：${stop.toFixed(prec)} `;
+    out += `\n🎯 分批目標價：`;
 
-    out += `\n🔻 建議賣出價位：約 ${fmt(entry, prec)} ` +
-           `\n   停損點：${fmt(resistance, prec)} ` +
-           `\n🎯 分批目標價（回補區間）：`;
-
-    dense.forEach((d, idx) => {
-      out += `\n   ▸ TP${idx + 1}：${fmt(d.price, prec)}（低點密集 ${d.freq} 次）`;
+    // --- TP lines array (黃色線) ---
+    window.aiTpLines = dense.map((d, i) => {
+      out += `\n   ▸ TP${i + 1}：${d.price.toFixed(prec)}（密集 ${d.freq} 次）`;
+      return { price: d.price, label: `TP${i + 1}`, color: "yellow" };
     });
-    out += `\n   ▸ TP${dense.length + 1}：${fmt(tpRR, prec)}（RR 1:2）`;
+
+    out += `\n   ▸ TP${dense.length + 1}：${tpRR.toFixed(prec)}（RR 1:2）`;
+    window.aiTpLines.push({
+      price: tpRR,
+      label: `TP${dense.length + 1} (RR)`,
+      color: "yellow"
+    });
   }
 
   return out;
 }
+
 
 
 
@@ -366,7 +364,10 @@ async function fetchLatestPrice(instId) {
 export async function loadChart() {
   if (!currentSymbol) return;
   document.getElementById("statusText").innerText = "⏳ 載入中...";
+
   if (chart) chart.remove();
+  tpLineObjects.forEach(obj => obj?.remove?.());
+  tpLineObjects = [];
 
   chart = LightweightCharts.createChart(document.getElementById('chart'), {
     layout: { background: { color: '#111' }, textColor: '#fff' },
@@ -377,17 +378,17 @@ export async function loadChart() {
       locale: 'zh-TW',
       timeFormatter: ts => {
         const d = new Date(ts * 1000);
-        const wd = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'][d.getDay()];
+        const wd = ['週日','週一','週二','週三','週四','週五','週六'][d.getDay()];
         const pad = n => String(n).padStart(2, '0');
-        return `${wd} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        return `${wd} ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       }
     }
   });
 
   candleSeries = chart.addCandlestickSeries({
-    upColor: '#26a69a', downColor: '#ef5350',
-    borderUpColor: '#26a69a', borderDownColor: '#ef5350',
-    wickUpColor: '#26a69a', wickDownColor: '#ef5350'
+    upColor:'#26a69a', downColor:'#ef5350',
+    borderUpColor:'#26a69a', borderDownColor:'#ef5350',
+    wickUpColor:'#26a69a',  wickDownColor:'#ef5350'
   });
 
   let candles = await fetchKlines(currentSymbol, currentInterval);
@@ -396,52 +397,82 @@ export async function loadChart() {
     return;
   }
 
-  // ── Heikin-Ashi 選項 ───────────────────────
   if (document.getElementById("toggleHA")?.checked) {
     const ha = [];
-    for (let i = 0; i < candles.length; i++) {
-      const prev = ha[i - 1] ?? candles[i];
-      const haClose = (candles[i].open + candles[i].high + candles[i].low + candles[i].close) / 4;
-      const haOpen  = (prev.open + prev.close) / 2;
+    for (let i=0;i<candles.length;i++){
+      const prev = ha[i-1] ?? candles[i];
+      const haClose = (candles[i].open+candles[i].high+candles[i].low+candles[i].close)/4;
+      const haOpen  = (prev.open+prev.close)/2;
       ha.push({
-        time:  candles[i].time,
-        open:  haOpen,
-        high:  Math.max(candles[i].high, haOpen, haClose),
-        low:   Math.min(candles[i].low,  haOpen, haClose),
-        close: haClose
+        time:candles[i].time,
+        open:haOpen,
+        high:Math.max(candles[i].high,haOpen,haClose),
+        low: Math.min(candles[i].low, haOpen,haClose),
+        close:haClose
       });
     }
     candles = ha;
   }
 
-  // ── ① 畫 K 棒 ─────────────────────────────
   candleSeries.setData(candles);
 
-  // ── ② 蠟燭形態標記 ────────────────────────
-  let markers = [];
-  if (document.getElementById("togglePattern")?.checked) {
+  let markers=[];
+  if(document.getElementById("togglePattern")?.checked){
     markers = detectCandlePatterns(candles);
     candleSeries.setMarkers(markers);
-  } else {
+  }else{
     candleSeries.setMarkers([]);
   }
 
-  // ── ③ 更新狀態與游標資訊 ──────────────────
-  latestCandles   = candles;
-  lastCandleTime  = candles.at(-1).time;
+  latestCandles = candles;
+  lastCandleTime = candles.at(-1).time;
   document.getElementById("statusText").innerText =
     `✅ ${convertToDisplaySymbol(currentSymbol)} - ${currentInterval} 載入成功`;
   attachCrosshairInfo();
 
-  // ── ✅ 智慧判讀：形態建議文字區塊 ─────────────
   const suggestion = generateAISuggestion(candles, markers);
-  const box = document.getElementById("aiSuggestionBox");
+  const box  = document.getElementById("aiSuggestionBox");
   const text = document.getElementById("aiSuggestionText");
   if (text && box) {
     text.innerText = suggestion;
     box.style.display = markers.length ? "block" : "none";
   }
+
+  // ✅ 8️⃣ 畫黃色 TP 線（實體水平線）
+  if (window.aiTpLines && Array.isArray(window.aiTpLines)) {
+    const firstTime = candles[0]?.time ?? lastCandleTime - 86400;
+    const lastTime  = candles.at(-1)?.time ?? lastCandleTime;
+
+    window.aiTpLines.forEach(tp => {
+      if (!tp?.price) return;
+
+      // 黃色實體線（從最左畫到最右）
+      const series = chart.addLineSeries({
+        lineWidth: 2,
+        color: tp.color || "yellow",
+        priceLineVisible: false,
+        lastValueVisible: false
+      });
+      series.setData([
+        { time: firstTime, value: tp.price },
+        { time: lastTime,  value: tp.price }
+      ]);
+      tpLineObjects.push(series);
+
+      // 軸標籤
+      const labelLine = chart.addPriceLine({
+        price: tp.price,
+        color: tp.color || "yellow",
+        lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        axisLabelVisible: true,
+        title: tp.label || 'TP'
+      });
+      tpLineObjects.push(labelLine);
+    });
+  }
 }
+
 
 
 
