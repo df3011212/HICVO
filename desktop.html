@@ -158,5 +158,15 @@
   </div>
 
   <script type="module" src="./js/main.js"></script>
+
+  <script>
+function hardReload() {
+  const confirmed = confirm("⚠️ 確定要強制重新整理此頁面？\n這將清除所有快取並重新載入。");
+  if (confirmed) {
+    location.reload(true); // 強制清除快取並重新載入
+  }
+}
+</script>
+
 </body>
 </html>
