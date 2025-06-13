@@ -3,6 +3,114 @@ let lastCandleTime = null;
 let latestCandles = [];
 let lastPriceLine = null;
 
+
+
+// 直接覆蓋原本整段 -----------------------------
+function detectCandlePatterns(candles, lookback = 10) {
+  const markers = [];
+  const start = Math.max(candles.length - lookback, 2); // 至少2根起跳
+  const isBull = (c) => c.close > c.open;
+  const isBear = (c) => c.close < c.open;
+  const bodySize = (c) => Math.abs(c.close - c.open);
+  const range = (c) => c.high - c.low;
+
+  for (let i = start; i < candles.length; i++) {
+    const c0 = candles[i - 2];
+    const c1 = candles[i - 1];
+    const c2 = candles[i];
+
+    const prev = c1;
+    const curr = c2;
+
+    // === 吞噬 ===
+    const bullishEngulf =
+      isBear(prev) && isBull(curr) &&
+      curr.open <= prev.close && curr.close >= prev.open;
+
+    const bearishEngulf =
+      isBull(prev) && isBear(curr) &&
+      curr.open >= prev.close && curr.close <= prev.open;
+
+    // === 平頭 ===
+    const flatBottom = isBull(prev) && isBull(curr) &&
+      Math.abs(prev.low - curr.low) < range(curr) * 0.1;
+
+    const flatTop = isBear(prev) && isBear(curr) &&
+      Math.abs(prev.high - curr.high) < range(curr) * 0.1;
+
+    // === 星形 ===
+    const morningStar = isBear(c0) && Math.abs(c1.close - c1.open) < range(c1) * 0.2 && isBull(c2) &&
+      c2.close > (c0.open + c0.close) / 2;
+
+    const eveningStar = isBull(c0) && Math.abs(c1.close - c1.open) < range(c1) * 0.2 && isBear(c2) &&
+      c2.close < (c0.open + c0.close) / 2;
+
+    // === 三線 ===
+    const threeWhiteSoldiers =
+      isBull(candles[i - 3]) && isBull(candles[i - 2]) && isBull(candles[i - 1]) &&
+      candles[i - 3].close < candles[i - 2].close &&
+      candles[i - 2].close < candles[i - 1].close;
+
+    const threeBlackCrows =
+      isBear(candles[i - 3]) && isBear(candles[i - 2]) && isBear(candles[i - 1]) &&
+      candles[i - 3].close > candles[i - 2].close &&
+      candles[i - 2].close > candles[i - 1].close;
+
+    // === 二陰一陽、二陽一陰 ===
+    const twoBearOneBull = isBear(candles[i - 2]) && isBear(candles[i - 1]) && isBull(candles[i]);
+    const twoBullOneBear = isBull(candles[i - 2]) && isBull(candles[i - 1]) && isBear(candles[i]);
+
+    // === 十字星、影線型態（單K） ===
+    const realBody = bodySize(curr);
+    const upperShadow = curr.high - Math.max(curr.open, curr.close);
+    const lowerShadow = Math.min(curr.open, curr.close) - curr.low;
+    const isDoji = realBody < range(curr) * 0.1;
+    const isHammer = lowerShadow > realBody * 2 && upperShadow < realBody;
+    const isInvertedHammer = upperShadow > realBody * 2 && lowerShadow < realBody;
+    const isShootingStar = upperShadow > realBody * 2 && lowerShadow < realBody && isBear(curr);
+    const isGravestone = upperShadow > realBody * 2 && lowerShadow < range(curr) * 0.1 && isDoji;
+    const isDragonfly = lowerShadow > realBody * 2 && upperShadow < range(curr) * 0.1 && isDoji;
+
+    // === 標記判斷 ===
+    const mark = (name, position, color) => {
+      markers.push({
+        time: curr.time,
+        position,
+        color,
+        shape: position === 'belowBar' ? 'arrowUp' : 'arrowDown',
+        text: name
+      });
+    };
+
+    if (bullishEngulf) mark("多頭吞噬", "belowBar", "#26a69a");
+    if (bearishEngulf) mark("空頭吞噬", "aboveBar", "#ef5350");
+
+    if (flatBottom) mark("平頭底部", "belowBar", "#26a69a");
+    if (flatTop) mark("平頭頂部", "aboveBar", "#ef5350");
+
+    if (morningStar) mark("早晨之星", "belowBar", "#26a69a");
+    if (eveningStar) mark("黃昏之星", "aboveBar", "#ef5350");
+
+    if (threeWhiteSoldiers) mark("三綠兵", "belowBar", "#26a69a");
+    if (threeBlackCrows) mark("三烏鴉", "aboveBar", "#ef5350");
+
+    if (twoBearOneBull) mark("二陰一陽", "belowBar", "#26a69a");
+    if (twoBullOneBear) mark("二陽一陰", "aboveBar", "#ef5350");
+
+    if (isDoji) mark("十字星", "aboveBar", "#999");
+    if (isHammer) mark("錘頭線", "belowBar", "#26a69a");
+    if (isInvertedHammer) mark("倒錘線", "belowBar", "#26a69a");
+    if (isShootingStar) mark("流星", "aboveBar", "#ef5350");
+    if (isGravestone) mark("墓碑線", "aboveBar", "#ef5350");
+    if (isDragonfly) mark("T字線", "belowBar", "#26a69a");
+  }
+
+  return markers;
+}
+
+
+
+
 function getPrecision(val) {
   if (val >= 1000) return 2;
   if (val >= 100) return 3;
@@ -102,24 +210,15 @@ export async function loadChart() {
   chart = LightweightCharts.createChart(document.getElementById('chart'), {
     layout: { background: { color: '#111' }, textColor: '#fff' },
     grid: { vertLines: { color: '#333' }, horLines: { color: '#333' } },
-    timeScale: {
-      timeVisible: true,
-      secondsVisible: false,
-      borderColor: '#333',
-      locale: 'zh-TW'
-    },
+    timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#333', locale: 'zh-TW' },
     priceScale: { borderColor: '#555' },
     localization: {
       locale: 'zh-TW',
-      timeFormatter: (timestamp) => {
-        const d = new Date(timestamp * 1000);
-        const weekday = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'][d.getDay()];
-        const yyyy = d.getFullYear();
-        const MM = String(d.getMonth() + 1).padStart(2, '0');
-        const dd = String(d.getDate()).padStart(2, '0');
-        const HH = String(d.getHours()).padStart(2, '0');
-        const mm = String(d.getMinutes()).padStart(2, '0');
-        return `${weekday} ${yyyy}-${MM}-${dd} ${HH}:${mm}`;
+      timeFormatter: ts => {
+        const d = new Date(ts * 1000);
+        const wd = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'][d.getDay()];
+        const pad = n => String(n).padStart(2, '0');
+        return `${wd} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       }
     }
   });
@@ -136,33 +235,42 @@ export async function loadChart() {
     return;
   }
 
-  const useHA = document.getElementById("toggleHA")?.checked;
-  if (useHA) {
-    const haCandles = [];
+  // ── Heikin-Ashi 選項 ───────────────────────
+  if (document.getElementById("toggleHA")?.checked) {
+    const ha = [];
     for (let i = 0; i < candles.length; i++) {
-      const prevHA = haCandles[i - 1] ?? candles[i];
+      const prev = ha[i - 1] ?? candles[i];
       const haClose = (candles[i].open + candles[i].high + candles[i].low + candles[i].close) / 4;
-      const haOpen = (prevHA.open + prevHA.close) / 2;
-      const haHigh = Math.max(candles[i].high, haOpen, haClose);
-      const haLow = Math.min(candles[i].low, haOpen, haClose);
-
-      haCandles.push({
-        time: candles[i].time,
-        open: haOpen,
-        high: haHigh,
-        low: haLow,
+      const haOpen  = (prev.open + prev.close) / 2;
+      ha.push({
+        time:  candles[i].time,
+        open:  haOpen,
+        high:  Math.max(candles[i].high, haOpen, haClose),
+        low:   Math.min(candles[i].low,  haOpen, haClose),
         close: haClose
       });
     }
-    candles = haCandles;
+    candles = ha;
   }
 
+  // ── ① 畫 K 棒 ─────────────────────────────
   candleSeries.setData(candles);
-  latestCandles = candles;
-  lastCandleTime = candles[candles.length - 1].time;
-  document.getElementById("statusText").innerText = `✅ ${convertToDisplaySymbol(currentSymbol)} - ${currentInterval} 載入成功`;
+
+  // ── ② 蠟燭形態標記 ────────────────────────
+  if (document.getElementById("togglePattern")?.checked) {
+    candleSeries.setMarkers(detectCandlePatterns(candles));
+  } else {
+    candleSeries.setMarkers([]);
+  }
+
+  // ── ③ 更新狀態與游標資訊 ──────────────────
+  latestCandles   = candles;
+  lastCandleTime  = candles.at(-1).time;
+  document.getElementById("statusText").innerText =
+    `✅ ${convertToDisplaySymbol(currentSymbol)} - ${currentInterval} 載入成功`;
   attachCrosshairInfo();
 }
+
 
 async function autoUpdatePrice() {
   if (!chart || !candleSeries || !currentSymbol) return;
@@ -185,6 +293,23 @@ async function autoUpdatePrice() {
     }
     lastPriceLine.applyOptions({ color });
     lastPriceLine.setData([{ time: now, value: price }]);
+
+        // --- 重新偵測最新 10 根 (含正在形成的那根) ---
+    if (document.getElementById("togglePattern")?.checked) {
+      // 把暫時更新後的最後一根也納入判斷
+      const tempCandles = [...latestCandles];
+      if (!useHA && tempCandles.length > 0) {
+        // 把剛剛 update 的價格同步到 temp 陣列最後一根
+        tempCandles[tempCandles.length - 1] = {
+          ...tempCandles.at(-1),
+          high: Math.max(tempCandles.at(-1).high, price),
+          low: Math.min(tempCandles.at(-1).low,  price),
+          close: price
+        };
+      }
+      candleSeries.setMarkers(detectCandlePatterns(tempCandles)); // 只顯示最後 10 根
+    }
+
 
     if (!useHA && lastCandleTime && latestCandles.length > 0) {
       const prev = latestCandles[latestCandles.length - 1];
@@ -252,6 +377,8 @@ function attachEventListeners() {
   document.getElementById("toggleHA").addEventListener("change", () => {
     loadChart();
   });
+
+  document.getElementById("togglePattern").addEventListener("change", loadChart);
 
   document.querySelectorAll("#intervalButtons button").forEach(btn => {
     btn.addEventListener("click", () => {
