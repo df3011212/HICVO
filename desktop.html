@@ -105,6 +105,22 @@
     <button data-interval="6H">6H</button>
   </div>
 
+
+  <button onclick="hardReload()" style="
+    position: relative;
+    top: 10px;
+    right: 10px;
+    background-color: #444;
+    color: #fff;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    z-index: 9999;
+  ">
+  🔄 網頁強制清除快取 重新整理
+</button>
+
   <div class="checkbox-group">
     <label><input type="checkbox" id="toggleOHLC" checked /> 顯示圖表值</label>
     <label><input type="checkbox" id="toggleHA" /> 平均K線（Heikin-Ashi）</label>

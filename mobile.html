@@ -11,6 +11,21 @@
   <input list="symbolList" id="symbolInput" placeholder="輸入幣種（如 BTCUSDT.P）" style="width: 100%; font-size: 18px; margin: 10px 0;">
   <datalist id="symbolList"></datalist>
 
+  <button onclick="hardReload()" style="
+    position: relative;
+    top: 10px;
+    right: 10px;
+    background-color: #444;
+    color: #fff;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    z-index: 9999;
+  ">
+  🔄 網頁強制清除快取 重新整理
+</button>
+
   <div id="intervalButtons" style="display: flex; flex-wrap: wrap; gap: 4px;">
     <button data-interval="15m">15m</button>
     <button data-interval="30m">30m</button>
