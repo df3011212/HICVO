@@ -1,3 +1,9 @@
+// main.js 最上方加
+const isMobilePage = location.pathname.includes("mobile.html");
+const isDesktopPage = location.pathname.includes("desktop.html");
+document.getElementById("chart").style.height = isMobilePage ? "320px" : "500px";
+
+
 let chart, candleSeries, currentSymbol = "", currentInterval = "1H";
 let lastCandleTime = null;
 let latestCandles = [];
