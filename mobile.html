@@ -11,20 +11,6 @@
   <input list="symbolList" id="symbolInput" placeholder="輸入幣種（如 BTCUSDT.P）" style="width: 100%; font-size: 18px; margin: 10px 0;">
   <datalist id="symbolList"></datalist>
 
-  <button onclick="hardReload()" style="
-    position: relative;
-    top: 10px;
-    right: 10px;
-    background-color: #444;
-    color: #fff;
-    border: none;
-    padding: 8px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    z-index: 9999;
-  ">
-  🔄 網頁強制清除快取 重新整理
-</button>
 
   <div id="intervalButtons" style="display: flex; flex-wrap: wrap; gap: 4px;">
     <button data-interval="15m">15m</button>
@@ -42,21 +28,6 @@
     <label><input type="checkbox" id="togglePattern" checked>蠟燭形態提示</label>
   </div>
 
-  <div id="haTableContainer" style="display:none;">
-    <h3 style="margin-bottom: 8px;">HA 動力判斷表（最近 10 根）</h3>
-    <table id="haTable">
-      <thead>
-        <tr>
-          <th>時間</th>
-          <th>方向</th>
-          <th>HA Body%</th>
-          <th>影線</th>
-          <th>分類</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
 
   <!-- 🔍 系統智慧建議提示 -->
 <div id="aiSuggestionBox" style="display:none; color: #fff; font-size: 14px; background: rgba(0,0,0,0.6); padding: 8px; margin-top: 8px; border-radius: 6px;">
@@ -76,16 +47,8 @@
     <img src="img/型態時間軸說明.jpg" alt="型態時間說明" style="max-width: 100%;">
   </div>
 
-  <script type="module" src="js/mobile-main.js"></script>
-
-    <script>
-function hardReload() {
-  const confirmed = confirm("⚠️ 確定要強制重新整理此頁面？\n這將清除所有快取並重新載入。");
-  if (confirmed) {
-    location.reload(true); // 強制清除快取並重新載入
-  }
-}
-</script>
+  <script type="module" src="./js/main.js"></script>
+  <script type="module" src="./js/main2.js"></script>
 
 </body>
 </html>
