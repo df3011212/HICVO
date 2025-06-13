@@ -378,7 +378,11 @@ function attachEventListeners() {
     loadChart();
   });
 
-  document.getElementById("togglePattern").addEventListener("change", loadChart);
+  document.getElementById("togglePattern").addEventListener("change", (e) => {
+    loadChart();
+    document.getElementById("patternGuide").style.display = e.target.checked ? "block" : "none";
+  });
+
 
   document.querySelectorAll("#intervalButtons button").forEach(btn => {
     btn.addEventListener("click", () => {
