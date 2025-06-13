@@ -3,9 +3,7 @@ let lastCandleTime = null;
 let latestCandles = [];
 let lastPriceLine = null;
 
-function hardReload() {
-  location.reload(true); // 強制重新整理（等同 Ctrl+F5）
-}
+
 
 // 直接覆蓋原本整段 -----------------------------
 function detectCandlePatterns(candles, lookback = 10) {
@@ -458,7 +456,6 @@ async function initSymbolList() {
     datalist.appendChild(opt);
   });
 }
-
 
 
 
