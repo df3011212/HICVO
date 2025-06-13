@@ -114,31 +114,60 @@ function detectCandlePatterns(candles, lookback = 10) {
   return markers;
 }
 
+// 將價格分箱以取得「密集度」—— step 代表箱寬 (預設 0.5% 價差)
+function getDenseLevels(prices, entryPrice, direction = "long", stepPct = 0.005) {
+  const step = entryPrice * stepPct;
+  const bins = {};
+
+  prices.forEach(p => {
+    // 只統計「上方壓力」或「下方支撐」
+    if (direction === "long" && p <= entryPrice) return;
+    if (direction === "short" && p >= entryPrice) return;
+
+    const key = Math.round(p / step) * step;   // 依 step 分箱
+    bins[key] = (bins[key] || 0) + 1;
+  });
+
+  // 依次數排序取前三
+  return Object.entries(bins)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)                 // 取 top3
+    .map(([price, freq]) => ({ price: parseFloat(price), freq }));
+}
+
+// 方便格式化 TP 行
+function fmt(price, precision) {
+  return price.toFixed(precision);
+}
+
+
+
 // === 智慧判讀：最後一根形態 + 理由 =========================
 function generateAISuggestion(candles, markers) {
   if (!candles.length) return "尚無價格資料";
 
-  // ── 0. 盤整偵測 ───────────────────────────
+  /* ——— 0. 盤整偵測 ——— */
   if (!markers.length) {
     const last10 = candles.slice(-10);
-    const high10 = Math.max(...last10.map(c => c.high));
-    const low10  = Math.min(...last10.map(c => c.low));
-    const rangePct = ((high10 - low10) / low10) * 100;
-    if (rangePct < 1.2) return "📉 價格進入盤整，建議觀望。";
+    const hi = Math.max(...last10.map(c => c.high));
+    const lo = Math.min(...last10.map(c => c.low));
+    const pct = ((hi - lo) / lo) * 100;
+    if (pct < 1.2) return "📉 價格進入盤整，建議觀望。";
     return "目前無明顯型態，建議觀察。";
   }
 
-  // ── 1. 基本資訊 ───────────────────────────
+  /* ——— 1. 基本資訊 ——— */
   const lastMarker = markers.at(-1);
-  const pattern  = lastMarker.text;
-  const timeStr  = new Date(lastMarker.time * 1000).toLocaleString("zh-TW", { hour12: false });
-  const bullKws  = ["多", "兵", "Hammer", "錘", "早晨", "三綠"];
-  const bearKws  = ["空", "烏鴉", "流星", "墓", "黃昏", "三烏"];
-  let bias = "觀望";
-  if (bullKws.some(k => pattern.includes(k))) bias = "偏多";
-  else if (bearKws.some(k => pattern.includes(k))) bias = "偏空";
+  const pattern = lastMarker.text;
+  const timeStr = new Date(lastMarker.time * 1000).toLocaleString("zh-TW", { hour12: false });
 
-  const reasonMap = {
+  const bullKW = ["多", "兵", "Hammer", "錘", "早晨", "三綠"];
+  const bearKW = ["空", "烏鴉", "流星", "墓", "黃昏", "三烏"];
+  let bias = "觀望";
+  if (bullKW.some(k => pattern.includes(k))) bias = "偏多";
+  else if (bearKW.some(k => pattern.includes(k))) bias = "偏空";
+
+  const explain = {
     "多頭吞噬": "買盤蠶食前根空頭整體區間，常見強勢反轉。",
     "空頭吞噬": "賣壓完全包覆多頭實體，留意下跌延伸。",
     "早晨之星": "連續空頭後出現星線＋長多方實體，可能見底反轉。",
@@ -148,46 +177,97 @@ function generateAISuggestion(candles, markers) {
     "錘頭線":   "下影線顯著，低檔買盤撐盤跡象。",
     "流星":     "上影線顯著，追高買盤乏力。"
   };
-  const reason = reasonMap[pattern] ?? "常見反轉／續航形態出現，留意後續量價配合。";
+  const reason = explain[pattern] ?? "常見反轉／續航形態出現，留意後續量價配合。";
 
-  // ── 2. 價格建議 ───────────────────────────
-  const lastCandle  = candles.at(-1);
-  const entryPrice  = lastCandle.close;
-  const precision   = getPrecision(entryPrice);
-  let  suggestion   = `🧠 最新 K 棒（${timeStr}）偵測到「${pattern}」，判斷：${bias}。\n📌 原因：${reason}`;
+  /* ——— 2. 核心價格資料 ——— */
+  const lastCandle = candles.at(-1);
+  const entry = lastCandle.close;
+  const prec  = getPrecision(entry);
 
-  if (bias === "偏多" && candles.length > 2) {
-    const support = candles.at(-2).open;            // 取前一根 open 當支撐
-    const risk    = entryPrice - support;
-    const upPct   = (risk / support) * 100;
+  let out = `🧠 最新 K 棒（${timeStr}）偵測到「${pattern}」，判斷：${bias}。\n📌 原因：${reason}`;
+
+  // 需要足夠歷史 K (≥220) 才做密集區統計
+  if (candles.length < 221) return out + "\n⚠️ 歷史資料不足，暫無出場建議。";
+
+  /* ——— 3. 多頭邏輯 ——— */
+  if (bias === "偏多") {
+    const support = candles.at(-2).open;
+    const risk = entry - support;
+    const upPct = (risk / support) * 100;
 
     if (upPct > 4) {
-      suggestion += `\n⚠️ 已上漲 ${upPct.toFixed(2)}%，短線追高風險高，建議等待回踩。`;
-    } else {
-      const target = entryPrice + risk * 2;         // RR 1:2
-      suggestion += `\n✅ 建議買入價位：約 ${entryPrice.toFixed(precision)} ` +
-                    `\n   停損點：${support.toFixed(precision)} ` +
-                    `\n🎯 目標價：${target.toFixed(precision)}（RR 1:2）`;
+      return out + `\n⚠️ 已上漲 ${upPct.toFixed(2)}%，短線追高風險高，建議等待回踩。`;
     }
+
+    // ‣ 取最近 220 根高點做密集區
+    const highs220 = candles.slice(-221, -1).map(c => c.high);
+    const dense = getDenseLevels(highs220, entry, "long"); // top3
+
+    // RR 目標
+    const tpRR = entry + risk * 2;
+
+    out += `\n✅ 建議買入價位：約 ${fmt(entry, prec)} ` +
+           `\n   停損點：${fmt(support, prec)} ` +
+           `\n🎯 分批目標價（出場區間）：`;
+
+    dense.forEach((d, idx) => {
+      out += `\n   ▸ TP${idx + 1}：${fmt(d.price, prec)}（高點密集 ${d.freq} 次）`;
+    });
+    out += `\n   ▸ TP${dense.length + 1}：${fmt(tpRR, prec)}（RR 1:2）`;
   }
 
-  if (bias === "偏空" && candles.length > 2) {
-    const resistance = candles.at(-2).open;         // 取前一根 open 當壓力
-    const risk       = resistance - entryPrice;
-    const downPct    = (risk / resistance) * 100;
+  /* ——— 4. 空頭邏輯 ——— */
+  if (bias === "偏空") {
+    const resistance = candles.at(-2).open;
+    const risk = resistance - entry;
+    const downPct = (risk / resistance) * 100;
 
     if (downPct > 4) {
-      suggestion += `\n⚠️ 價格已急跌 ${downPct.toFixed(2)}%，不建議追空。`;
-    } else {
-      const target = entryPrice - risk * 2;         // RR 1:2
-      suggestion += `\n🔻 建議賣出價位：約 ${entryPrice.toFixed(precision)} ` +
-                    `\n   停損點：${resistance.toFixed(precision)} ` +
-                    `\n🎯 目標價：${target.toFixed(precision)}（RR 1:2）`;
+      return out + `\n⚠️ 價格已急跌 ${downPct.toFixed(2)}%，不建議追空。`;
     }
+
+    // ‣ 取最近 220 根低點做密集區
+    const lows220 = candles.slice(-221, -1).map(c => c.low);
+    const dense = getDenseLevels(lows220, entry, "short"); // top3
+
+    const tpRR = entry - risk * 2;
+
+    out += `\n🔻 建議賣出價位：約 ${fmt(entry, prec)} ` +
+           `\n   停損點：${fmt(resistance, prec)} ` +
+           `\n🎯 分批目標價（回補區間）：`;
+
+    dense.forEach((d, idx) => {
+      out += `\n   ▸ TP${idx + 1}：${fmt(d.price, prec)}（低點密集 ${d.freq} 次）`;
+    });
+    out += `\n   ▸ TP${dense.length + 1}：${fmt(tpRR, prec)}（RR 1:2）`;
   }
 
-  return suggestion;
+  return out;
 }
+
+
+
+
+function getTargetPrice(candles, entryPrice, risk, direction = "long") {
+  const rrTarget = direction === "long"
+    ? entryPrice + risk * 2
+    : entryPrice - risk * 2;
+
+  const slice = candles.slice(-6, -1);
+  const techTarget = direction === "long"
+    ? Math.max(...slice.map(c => c.high))
+    : Math.min(...slice.map(c => c.low));
+
+  const gapPct = direction === "long"
+    ? ((techTarget - entryPrice) / entryPrice) * 100
+    : ((entryPrice - techTarget) / entryPrice) * 100;
+
+  if (gapPct < 1.0) return rrTarget; // 技術位太近則回退用 RR
+  return direction === "long"
+    ? Math.min(rrTarget, techTarget)
+    : Math.max(rrTarget, techTarget);
+}
+
 
 
 
