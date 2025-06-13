@@ -108,7 +108,38 @@ function detectCandlePatterns(candles, lookback = 10) {
   return markers;
 }
 
+// === 智慧判讀：最後一根形態 + 理由 =========================
+function generateAISuggestion(candles, markers) {
+  if (!markers.length) return "目前無明顯蠟燭訊號，建議觀望。";
 
+  // 取最接近收盤時間的一筆標記
+  const lastMarker = markers.at(-1);
+  const pattern = lastMarker.text;
+  const timeStr = new Date(lastMarker.time * 1000)
+                    .toLocaleString("zh-TW", { hour12: false });
+
+  // 判斷多空傾向
+  const bullKeywords = ["多", "兵", "Hammer", "錘", "早晨", "三綠"];
+  const bearKeywords = ["空", "烏鴉", "流星", "墓", "黃昏", "三烏"];
+  let bias = "觀望";
+  if (bullKeywords.some(k => pattern.includes(k))) bias = "偏多";
+  else if (bearKeywords.some(k => pattern.includes(k))) bias = "偏空";
+
+  // 形態→理由對照
+  const reasonMap = {
+    "多頭吞噬": "買盤蠶食前根空頭整體區間，常見強勢反轉。",
+    "空頭吞噬": "賣壓完全包覆多頭實體，留意下跌延伸。",
+    "早晨之星": "連續空頭後出現星線＋長多方實體，可能見底反轉。",
+    "黃昏之星": "連續多頭後出現星線＋長空方實體，警示轉弱。",
+    "三綠兵":   "連三根長多方實體，動能續強。",
+    "三烏鴉":   "連三根長空方實體，動能續弱。",
+    "錘頭線":   "下影線顯著，低檔買盤撐盤跡象。",
+    "流星":     "上影線顯著，追高買盤乏力。"
+  };
+  const reason = reasonMap[pattern] ?? "常見反轉／續航形態出現，留意後續量價配合。";
+
+  return `最新 K 棒（${timeStr}）偵測到「${pattern}」，判斷：${bias}。\n原因：${reason}`;
+}
 
 
 function getPrecision(val) {
@@ -257,8 +288,10 @@ export async function loadChart() {
   candleSeries.setData(candles);
 
   // ── ② 蠟燭形態標記 ────────────────────────
+  let markers = [];
   if (document.getElementById("togglePattern")?.checked) {
-    candleSeries.setMarkers(detectCandlePatterns(candles));
+    markers = detectCandlePatterns(candles);
+    candleSeries.setMarkers(markers);
   } else {
     candleSeries.setMarkers([]);
   }
@@ -269,7 +302,17 @@ export async function loadChart() {
   document.getElementById("statusText").innerText =
     `✅ ${convertToDisplaySymbol(currentSymbol)} - ${currentInterval} 載入成功`;
   attachCrosshairInfo();
+
+  // ── ✅ 智慧判讀：形態建議文字區塊 ─────────────
+  const suggestion = generateAISuggestion(candles, markers);
+  const box = document.getElementById("aiSuggestionBox");
+  const text = document.getElementById("aiSuggestionText");
+  if (text && box) {
+    text.innerText = suggestion;
+    box.style.display = markers.length ? "block" : "none";
+  }
 }
+
 
 
 async function autoUpdatePrice() {
@@ -294,12 +337,11 @@ async function autoUpdatePrice() {
     lastPriceLine.applyOptions({ color });
     lastPriceLine.setData([{ time: now, value: price }]);
 
-        // --- 重新偵測最新 10 根 (含正在形成的那根) ---
+    // --- 重新偵測最新 10 根 (含正在形成的那根) ---
+    let markers = [];
     if (document.getElementById("togglePattern")?.checked) {
-      // 把暫時更新後的最後一根也納入判斷
       const tempCandles = [...latestCandles];
       if (!useHA && tempCandles.length > 0) {
-        // 把剛剛 update 的價格同步到 temp 陣列最後一根
         tempCandles[tempCandles.length - 1] = {
           ...tempCandles.at(-1),
           high: Math.max(tempCandles.at(-1).high, price),
@@ -307,10 +349,20 @@ async function autoUpdatePrice() {
           close: price
         };
       }
-      candleSeries.setMarkers(detectCandlePatterns(tempCandles)); // 只顯示最後 10 根
+      markers = detectCandlePatterns(tempCandles);
+      candleSeries.setMarkers(markers); // 顯示最新標記
     }
 
+    // === 🧠 AI 智慧判讀更新段落（放在 pattern 更新之後） ===
+    const suggestion = generateAISuggestion(latestCandles, markers);
+    const box = document.getElementById("aiSuggestionBox");
+    const text = document.getElementById("aiSuggestionText");
+    if (text && box) {
+      text.innerText = suggestion;
+      box.style.display = markers.length ? "block" : "none";
+    }
 
+    // --- 更新最後一根 K 棒收盤價（非 HA 模式） ---
     if (!useHA && lastCandleTime && latestCandles.length > 0) {
       const prev = latestCandles[latestCandles.length - 1];
       const updated = {
@@ -331,6 +383,7 @@ async function autoUpdatePrice() {
     console.error("❌ 更新價格錯誤：", err);
   }
 }
+
 
 function attachCrosshairInfo() {
   if (!chart || !candleSeries) return;
