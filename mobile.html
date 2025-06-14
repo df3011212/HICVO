@@ -39,7 +39,18 @@
   <div id="chart" style="height: 320px;"></div>
   <div id="statusText" style="text-align:center;">🔄 初始化中...</div>
 
-
+    <label style="color:white;">📉 MACD 高度：
+  <select id="macdHeightSelect">
+    <option value="80">小</option>
+    <option value="140" selected>中</option>
+    <option value="200">大</option>
+  </select>
+  <label style="color:white; margin-left:12px;">
+  🧠 啟用身分判斷版 MACD
+  <input type="checkbox" id="toggleMACDIdentity">
+</label>
+  </label>
+   <div id="macd" style="height:140px; margin-top:4px;"></div>
 
   <!-- 🔍 型態說明圖示（預設隱藏） -->
   <div id="patternGuide" style="display:none; margin-top: 12px; text-align: center;">
