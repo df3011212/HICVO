@@ -11,6 +11,8 @@ let lastCandleTime = null;
 let latestCandles = [];
 let lastPriceLine = null;
 let tpLineObjects = [];
+let macdChart, macdLine, signalLine, histSeries;
+
 
 
 // 直接覆蓋原本整段 -----------------------------
@@ -361,29 +363,42 @@ async function fetchLatestPrice(instId) {
   return parseFloat(json.data[0].last);
 }
 
+
+
+/* ---------- 取代原整個 loadChart ---------- */
 export async function loadChart() {
   if (!currentSymbol) return;
-  document.getElementById("statusText").innerText = "⏳ 載入中...";
+  document.getElementById('statusText').innerText = '⏳ 載入中…';
 
+  /* === 前置清理 === */
   if (chart) chart.remove();
-  tpLineObjects.forEach(obj => obj?.remove?.());
+  if (macdChart) macdChart.remove();
+  tpLineObjects.forEach(l => l?.remove?.());
   tpLineObjects = [];
 
-  chart = LightweightCharts.createChart(document.getElementById('chart'), {
-    layout: { background: { color: '#111' }, textColor: '#fff' },
-    grid: { vertLines: { color: '#333' }, horLines: { color: '#333' } },
-    timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#333', locale: 'zh-TW' },
-    priceScale: { borderColor: '#555' },
-    localization: {
-      locale: 'zh-TW',
-      timeFormatter: ts => {
-        const d = new Date(ts * 1000);
-        const wd = ['週日','週一','週二','週三','週四','週五','週六'][d.getDay()];
-        const pad = n => String(n).padStart(2, '0');
-        return `${wd} ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  /* === 讀取 UI 狀態 === */
+  const macdHeight = parseInt(document.getElementById("macdHeightSelect")?.value || 140);
+  const useIdentity = document.getElementById("toggleMACDIdentity")?.checked;   // 🆕
+  
+  /* === 主圖 (蠟燭) === */
+  chart = LightweightCharts.createChart(
+    document.getElementById('chart'),
+    {
+      layout:{ background:{ color:'#111' }, textColor:'#fff' },
+      grid  :{ vertLines:{ color:'#333' }, horLines:{ color:'#333' } },
+      timeScale:{ timeVisible:true, borderColor:'#333', locale:'zh-TW' },
+      priceScale:{ borderColor:'#555' },
+      localization:{
+        locale:'zh-TW',
+        timeFormatter:ts=>{
+          const d=new Date(ts*1000);
+          const pad=n=>String(n).padStart(2,'0');
+          const wd=['週日','週一','週二','週三','週四','週五','週六'][d.getDay()];
+          return `${wd} ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
       }
     }
-  });
+  );
 
   candleSeries = chart.addCandlestickSeries({
     upColor:'#26a69a', downColor:'#ef5350',
@@ -391,46 +406,174 @@ export async function loadChart() {
     wickUpColor:'#26a69a',  wickDownColor:'#ef5350'
   });
 
+  /* === 下載 K 線 === */
   let candles = await fetchKlines(currentSymbol, currentInterval);
-  if (!candles.length) {
-    document.getElementById("statusText").innerText = "❌ 無法載入資料";
+  if (!candles.length){
+    document.getElementById('statusText').innerText = '❌ 無法載入資料';
     return;
   }
 
-  if (document.getElementById("toggleHA")?.checked) {
-    const ha = [];
+  /* Heikin-Ashi (可選) */
+  if (document.getElementById('toggleHA')?.checked){
+    const ha=[];
     for (let i=0;i<candles.length;i++){
-      const prev = ha[i-1] ?? candles[i];
-      const haClose = (candles[i].open+candles[i].high+candles[i].low+candles[i].close)/4;
-      const haOpen  = (prev.open+prev.close)/2;
+      const p=ha[i-1]??candles[i];
+      const c=(candles[i].open+candles[i].high+candles[i].low+candles[i].close)/4;
+      const o=(p.open+p.close)/2;
       ha.push({
         time:candles[i].time,
-        open:haOpen,
-        high:Math.max(candles[i].high,haOpen,haClose),
-        low: Math.min(candles[i].low, haOpen,haClose),
-        close:haClose
+        open:o,
+        high:Math.max(candles[i].high,o,c),
+        low :Math.min(candles[i].low ,o,c),
+        close:c
       });
     }
-    candles = ha;
+    candles=ha;
   }
-
   candleSeries.setData(candles);
 
-  let markers=[];
-  if(document.getElementById("togglePattern")?.checked){
-    markers = detectCandlePatterns(candles);
-    candleSeries.setMarkers(markers);
-  }else{
-    candleSeries.setMarkers([]);
-  }
+  /* 蠟燭形態 */
+  const mks = document.getElementById('togglePattern')?.checked ? detectCandlePatterns(candles):[];
+  candleSeries.setMarkers(mks);
 
-  latestCandles = candles;
-  lastCandleTime = candles.at(-1).time;
-  document.getElementById("statusText").innerText =
-    `✅ ${convertToDisplaySymbol(currentSymbol)} - ${currentInterval} 載入成功`;
+  latestCandles=candles;
+  lastCandleTime=candles.at(-1).time;
+  document.getElementById('statusText').innerText = `✅ ${convertToDisplaySymbol(currentSymbol)} - ${currentInterval} 載入成功`;
   attachCrosshairInfo();
 
-  const suggestion = generateAISuggestion(candles, markers);
+  /* === 建立 MACD 子圖 (高度依 macdHeight) === */
+  macdChart = LightweightCharts.createChart(
+    document.getElementById('macd'),
+    {
+      height: macdHeight,
+      layout:{ background:{ color:'#111' }, textColor:'#fff' },
+      grid  :{ vertLines:{ color:'#333' }, horLines:{ color:'#333' } },
+      timeScale:{ visible:true, borderColor:'#333' },
+      rightPriceScale:{ borderColor:'#555' }
+    }
+  );
+
+  /* === 共用的三條 series === */
+  histSeries = macdChart.addHistogramSeries({
+    priceFormat:{ type:'price', precision:4 },
+    priceLineVisible:false, lastValueVisible:false
+  });
+  macdLine   = macdChart.addLineSeries({
+    color:'#2196f3', lineWidth:1,
+    priceLineVisible:false, lastValueVisible:false
+  });
+  signalLine = macdChart.addLineSeries({
+    color:'#ffa726', lineWidth:1,
+    priceLineVisible:false, lastValueVisible:false
+  });
+
+  /* === 計算 MACD 數據 === */
+  const macdArr = calcMACD(candles);
+  histSeries.setData(macdArr.map(d=>({ time:d.time,value:d.hist,color:d.hist>=0?'#26a69a':'#ef5350' })));
+  macdLine  .setData(macdArr.map(d=>({ time:d.time,value:d.macd })));
+  signalLine.setData(macdArr.map(d=>({ time:d.time,value:d.signal })));
+
+  /* === 身分版判斷 (交叉 / Peak / Trough) === */
+  if (useIdentity){
+    const markers = [];
+
+    /* 1. DIF & SIGNAL 穿越 0 軸 */
+    for (let i=1;i<macdArr.length;i++){
+      const p=macdArr[i-1], c=macdArr[i];
+      // Signal
+      if (p.signal<0 && c.signal>=0) markers.push({ time:c.time,position:'aboveBar',shape:'triangleUp',  color:'orange',text:'Sig↑0' });
+      if (p.signal>0 && c.signal<=0) markers.push({ time:c.time,position:'belowBar',shape:'triangleDown',color:'orange',text:'Sig↓0' });
+      // DIF
+      if (p.macd<0 && c.macd>=0) markers.push({ time:c.time,position:'aboveBar',shape:'triangleUp',  color:'blue',text:'DIF↑0' });
+      if (p.macd>0 && c.macd<=0) markers.push({ time:c.time,position:'belowBar',shape:'triangleDown',color:'blue',text:'DIF↓0' });
+    }
+
+    /* 2. Peak / Trough + 連線 */
+    const L=3,R=3;         // pivot 左右寬度
+    let lastH=null,lastL=null;
+    for (let i=L;i<macdArr.length-R;i++){
+      const m=macdArr[i];
+      const leftMax = Math.max(...macdArr.slice(i-L,i+1).map(e=>e.macd));
+      const rightMax= Math.max(...macdArr.slice(i,i+R+1).map(e=>e.macd));
+      const leftMin = Math.min(...macdArr.slice(i-L,i+1).map(e=>e.macd));
+      const rightMin= Math.min(...macdArr.slice(i,i+R+1).map(e=>e.macd));
+
+      // Peak (綠)
+      if (m.macd===leftMax && m.macd===rightMax){
+        markers.push({ time:m.time,position:'aboveBar',shape:'circle',color:'#11fd00',text:'H' });
+        if (lastH && m.macd<lastH.v){
+          macdChart.addLineSeries({ color:'#00ff08',lineWidth:2,priceLineVisible:false,lastValueVisible:false })
+                   .setData([{time:lastH.t,value:lastH.v},{time:m.time,value:m.macd}]);
+        }
+        lastH={t:m.time,v:m.macd};
+      }
+      // Trough (黃)
+      if (m.macd===leftMin && m.macd===rightMin){
+        markers.push({ time:m.time,position:'belowBar',shape:'circle',color:'#ff0000',text:'L' });
+        if (lastL && m.macd>lastL.v){
+          macdChart.addLineSeries({ color:'#f8ff3b',lineWidth:2,priceLineVisible:false,lastValueVisible:false })
+                   .setData([{time:lastL.t,value:lastL.v},{time:m.time,value:m.macd}]);
+        }
+        lastL={t:m.time,v:m.macd};
+      }
+    }
+
+    macdLine.setMarkers(markers);   // 一次設定
+  } else {
+    macdLine.setMarkers([]);        // 一般版不顯示身分標記
+  }
+
+  /* === 主圖 → 子圖 單向同步 === */
+  const range = chart.timeScale().getVisibleLogicalRange();
+  if (range) macdChart.timeScale().setVisibleLogicalRange(range);
+  chart.timeScale().subscribeVisibleLogicalRangeChange(r=>{
+    if (r) macdChart.timeScale().setVisibleLogicalRange(r);
+  });
+
+  /* === 其他：AI TP 計算、拖拉重算（保持原寫法） === */
+  updateSuggestionAndTPLines(candles);
+
+  let deb;
+  chart.timeScale().subscribeVisibleTimeRangeChange(r=>{
+    clearTimeout(deb);
+    deb=setTimeout(()=>{
+      if (!r||r.from===undefined||r.to===undefined) return;
+      const vis=candles.filter(c=>c.time>=Math.floor(r.from)&&c.time<=Math.floor(r.to));
+      if (vis.length>=10){
+        updateSuggestionAndTPLines(vis);
+        document.getElementById('statusText').innerText=`🔄 已重算 TP（視窗內 ${vis.length} 根 K）`;
+      }else{
+        document.getElementById('statusText').innerText=`⚠️ 畫面 K 僅 ${vis.length} 根，少於 10 根不重算 TP`;
+      }
+    },300);
+  });
+}
+
+
+
+
+
+
+
+function calcEMA(vals, p){const k=2/(p+1);const out=[];vals.forEach((v,i)=>{out.push(i? v*k+out[i-1]*(1-k):v);});return out;}
+function calcMACD(c, f=12, s=26, sig=9){
+  const closes=c.map(x=>x.close);
+  const emaF=calcEMA(closes,f);
+  const emaS=calcEMA(closes,s);
+  const macd=closes.map((_,i)=>emaF[i]-emaS[i]);
+  const signal=calcEMA(macd,sig);
+  const hist=macd.map((m,i)=>m-signal[i]);
+  return c.map((k,i)=>({ time:k.time, macd:macd[i], signal:signal[i], hist:hist[i] }));
+}
+
+
+
+function updateSuggestionAndTPLines(allCandles) {
+  const markers = document.getElementById("togglePattern")?.checked
+    ? detectCandlePatterns(allCandles)
+    : [];
+
+  const suggestion = generateAISuggestion(allCandles, markers);
   const box  = document.getElementById("aiSuggestionBox");
   const text = document.getElementById("aiSuggestionText");
   if (text && box) {
@@ -438,40 +581,38 @@ export async function loadChart() {
     box.style.display = markers.length ? "block" : "none";
   }
 
-  // ✅ 8️⃣ 畫黃色 TP 線（實體水平線）
+  tpLineObjects.forEach(obj => obj?.remove?.());
+  tpLineObjects = [];
+
   if (window.aiTpLines && Array.isArray(window.aiTpLines)) {
-    const firstTime = candles[0]?.time ?? lastCandleTime - 86400;
-    const lastTime  = candles.at(-1)?.time ?? lastCandleTime;
+    const firstTime = allCandles[0]?.time ?? allCandles.at(-1).time - 86400;
+    const lastTime = allCandles.at(-1)?.time;
 
     window.aiTpLines.forEach(tp => {
-      if (!tp?.price) return;
-
-      // 黃色實體線（從最左畫到最右）
       const series = chart.addLineSeries({
         lineWidth: 2,
-        color: tp.color || "yellow",
+        color: tp.color || 'yellow',
         priceLineVisible: false,
         lastValueVisible: false
       });
       series.setData([
         { time: firstTime, value: tp.price },
-        { time: lastTime,  value: tp.price }
+        { time: lastTime, value: tp.price }
       ]);
       tpLineObjects.push(series);
 
-      // 軸標籤
-      const labelLine = chart.addPriceLine({
+      const label = chart.addPriceLine({
         price: tp.price,
-        color: tp.color || "yellow",
+        color: tp.color || 'yellow',
         lineWidth: 2,
-        lineStyle: LightweightCharts.LineStyle.Solid,
         axisLabelVisible: true,
         title: tp.label || 'TP'
       });
-      tpLineObjects.push(labelLine);
+      tpLineObjects.push(label);
     });
   }
 }
+
 
 
 
@@ -580,6 +721,7 @@ function attachCrosshairInfo() {
 }
 
 function attachEventListeners() {
+  /* === 幣種輸入框 === */
   document.getElementById("symbolInput").addEventListener("change", () => {
     let val = document.getElementById("symbolInput").value.trim().toUpperCase();
     if (val.endsWith("USDT.P")) val = convertToInstId(val);
@@ -588,16 +730,28 @@ function attachEventListeners() {
     loadChart();
   });
 
-  document.getElementById("toggleHA").addEventListener("change", () => {
-    loadChart();
-  });
+  /* === 平均 K (HA) 切換 === */
+  document.getElementById("toggleHA").addEventListener("change", () => loadChart());
 
-  document.getElementById("togglePattern").addEventListener("change", (e) => {
+  /* === 蠟燭形態切換 === */
+  document.getElementById("togglePattern").addEventListener("change", e => {
     loadChart();
     document.getElementById("patternGuide").style.display = e.target.checked ? "block" : "none";
   });
 
+  /* === MACD 高度下拉選單 === */
+  const macdHeightSelect = document.getElementById("macdHeightSelect");
+  if (macdHeightSelect) {
+    macdHeightSelect.addEventListener("change", () => loadChart());
+  }
 
+  /* === 🧠 身分版 MACD 開關 === */
+  const idChk = document.getElementById("toggleMACDIdentity");
+  if (idChk) {
+    idChk.addEventListener("change", () => loadChart());
+  }
+
+  /* === 時間週期按鈕 === */
   document.querySelectorAll("#intervalButtons button").forEach(btn => {
     btn.addEventListener("click", () => {
       document.querySelectorAll("#intervalButtons button").forEach(b => b.classList.remove("active"));
@@ -607,6 +761,11 @@ function attachEventListeners() {
     });
   });
 }
+
+
+
+
+
 
 async function initSymbolList() {
   const list = await fetchSymbolList();
