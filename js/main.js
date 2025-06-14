@@ -1,5 +1,3 @@
-
-
 // main.js 最上方加
 const isMobilePage = location.pathname.includes("mobile.html");
 const isDesktopPage = location.pathname.includes("desktop.html");
@@ -118,31 +116,33 @@ function detectCandlePatterns(candles, lookback = 10) {
   return markers;
 }
 
-// 將價格分箱以取得「密集度」—— step 代表箱寬 (預設 0.5% 價差)
-// 取得高/低點的「密集度」分箱
 function getDenseLevels(prices, entryPrice, direction = "long", stepPct = 0.005, keep = 3) {
-  // 1️⃣ 安全檢查
   if (!Array.isArray(prices) || !prices.length) return [];
   if (!isFinite(entryPrice) || entryPrice <= 0) return [];
 
-  // 2️⃣ 算分箱寬度，防止 0 or NaN
-  const step = Math.max(entryPrice * stepPct, Number.EPSILON);
+  const step = Math.max(entryPrice * stepPct, 0.01);  // ⚠️ 最小步幅設定為 0.01
   const bins = Object.create(null);
 
-  // 3️⃣ 建立分箱
   for (const p of prices) {
-    if (direction === "long"  && p <= entryPrice) continue; // 只看上方壓力
-    if (direction === "short" && p >= entryPrice) continue; // 只看下方支撐
-    const key = Math.round(p / step) * step;               // 分箱
+    if (!isFinite(p) || p <= 0) continue;             // ⚠️ 過濾異常資料
+    if (direction === "long" && p <= entryPrice) continue;
+    if (direction === "short" && p >= entryPrice) continue;
+
+    const key = Math.round(p / step) * step;
     bins[key] = (bins[key] || 0) + 1;
   }
 
-  // 4️⃣ 依出現頻率排序，取前 keep 個
   return Object.entries(bins)
     .sort((a, b) => b[1] - a[1])
     .slice(0, keep)
-    .map(([price, freq]) => ({ price: parseFloat(price), freq }));
+    .map(([price, freq]) => ({
+      price: parseFloat(price),
+      freq
+    }))
+    .filter(p => p.price >= 0.01);  // ⚠️ TP 小於 0.01 不要畫
 }
+
+
 
 
 // 方便格式化 TP 行
@@ -156,93 +156,95 @@ function fmt(price, precision) {
 function generateAISuggestion(candles, markers) {
   if (!candles.length) return "尚無價格資料";
 
-  /* 0. 盤整偵測 -------------------------------------------------- */
-  if (!markers.length) {
-    const last10 = candles.slice(-10);
-    const hi = Math.max(...last10.map(c => c.high));
-    const lo = Math.min(...last10.map(c => c.low));
-    const pct = ((hi - lo) / lo) * 100;
-    if (pct < 1.2) return "📉 價格進入盤整，建議觀望。";
-    return "目前無明顯型態，建議觀察。";
-  }
+  const latest = candles.at(-1);
+  const prev = candles.at(-2);
+  const precision = getPrecision(latest.close);
+  const entry = latest.close;
+  const timeStr = new Date(latest.time * 1000).toLocaleString("zh-TW", { hour12: false });
 
-  /* 1. 基本資訊 -------------------------------------------------- */
-  const lastMarker = markers.at(-1);
-  const pattern = lastMarker.text;
-  const timeStr = new Date(lastMarker.time * 1000)
-                    .toLocaleString("zh-TW", { hour12:false });
-
-  const bullKW = ["多","兵","Hammer","錘","早晨","三綠"];
-  const bearKW = ["空","烏鴉","流星","墓","黃昏","三烏"];
-  let bias = "觀望";
-  if (bullKW.some(k => pattern.includes(k))) bias = "偏多";
-  else if (bearKW.some(k => pattern.includes(k))) bias = "偏空";
-
-  const explain = {
-    "多頭吞噬":"買盤蠶食前根空頭，常見強勢反轉。",
-    "空頭吞噬":"賣壓包覆多頭，留意下跌延伸。",
-    "早晨之星":"連續空頭後出現星線＋多方實體，可能見底反轉。",
-    "黃昏之星":"連續多頭後出現星線＋空方實體，警示轉弱。",
-    "三綠兵":"連三根長多方實體，動能續強。",
-    "三烏鴉":"連三根長空方實體，動能續弱。",
-    "錘頭線":"下影線長，低檔買盤撐盤跡象。",
-    "流星":"上影線長，追高買盤乏力。"
+  const pattern = markers.at(-1)?.text ?? "";
+  const biasMap = {
+    "多頭吞噬": "偏多", "空頭吞噬": "偏空", "早晨之星": "偏多", "黃昏之星": "偏空",
+    "三綠兵": "偏多", "三烏鴉": "偏空", "錘頭線": "偏多", "流星": "偏空",
+    "墓碑線": "偏空", "T字線": "偏多", "倒錘線": "偏多", "二陰一陽": "偏多", "二陽一陰": "偏空",
+    "十字星": "觀察", "平頭頂部": "偏空", "平頭底部": "偏多"
   };
-  const reason = explain[pattern] ?? "常見反轉／續航形態出現。";
+  const bias = biasMap[pattern] || "觀察";
 
-  /* 2. 價格 ------------------------------------------------------ */
-  const entry = candles.at(-1).close;
-  const prec  = getPrecision(entry);
+  const macd = calcMACD(candles);
+  const mNow = macd.at(-1), mPrev = macd.at(-2);
+  const macdUp = mNow.macd > mNow.signal && mNow.macd > mPrev.macd;
+  const macdTrend = mNow.macd >= 0 ? "多方動能" : "空方動能";
+  const bodyPct = Math.abs(latest.close - latest.open) / ((latest.open + latest.close) / 2);
+  const bodyStrong = bodyPct > 0.012;
+  const isValidSetup = (bias === "偏多" && macdUp && bodyStrong) || (bias === "偏空" && !macdUp && bodyStrong);
 
-  let out = `🧠 最新 K 棒（${timeStr}）偵測到「${pattern}」，判斷：${bias}。\n📌 原因：${reason}`;
+  const risk = Math.abs(entry - prev.open);
+  const rrTarget = bias === "偏多" ? entry + risk * 2 : entry - risk * 2;
+  const stopLoss = prev.open;
 
-  // 沒有足夠歷史
-  if (candles.length < 221) {
-    window.aiTpLines = [];
-    return out + "\n⚠️ 歷史資料不足，暫無出場建議。";
+  const highsOrLows = bias === "偏多"
+    ? candles.slice(-221, -1).map(c => c.high)
+    : candles.slice(-221, -1).map(c => c.low);
+
+  const dense = getDenseLevels(highsOrLows, entry, bias === "偏多" ? "long" : "short");
+  window.aiTpLines = dense.map((d, i) => ({ price: d.price, label: `TP${i + 1}`, color: "yellow" }));
+  window.aiTpLines.push({ price: rrTarget, label: `TP${dense.length + 1} (RR)`, color: "yellow" });
+
+  const lastHigh = Math.max(...candles.slice(-10).map(c => c.high));
+  const chasing = bias === "偏多" && entry > lastHigh * 0.995;
+
+  let out = `📉 判斷：${bias}\n`;
+  out += `📌 形態：「${pattern || "無明顯形態"}」\n`;
+  out += `🔍 MACD：${macdTrend}（${macdUp ? "上升" : "下降"}）\n`;
+
+  if (!pattern) return out + `⚠️ 未偵測到明確形態，建議觀察即可。`;
+  if (!isValidSetup) return out + `⚠️ 雖有形態，但動能不足或實體過小，不建議操作。`;
+
+  out += `📈 建議價格：${entry.toFixed(precision)}\n`;
+  out += `⛔ 停損位置：${stopLoss.toFixed(precision)}\n`;
+  out += `🎯 分批出場：`;
+  window.aiTpLines.forEach(tp => {
+    out += `\n   ▸ ${tp.label}：${tp.price.toFixed(precision)}`;
+  });
+
+  if (bias === "偏空") {
+    out += `\n🧭 建議：已形成空方結構，若已有空單可續抱。`;
+    out += `\n📌 壓力區：${(entry + risk).toFixed(precision)} 附近`;
   }
 
-  /* 3. 生成 TP --------------------------------------------------- */
-  if (bias === "偏多" || bias === "偏空") {
-    const isLong  = bias === "偏多";
-    const refOpen = candles.at(-2).open;
-    const risk    = Math.abs(entry - refOpen);
-    const highsOrLows = isLong
-      ? candles.slice(-221, -1).map(c => c.high)
-      : candles.slice(-221, -1).map(c => c.low);
+  if (bias === "偏多") {
+    out += `\n🧭 建議：等待回測或突破確認再進場，勿追高。`;
+  }
 
-    const dense = getDenseLevels(
-      highsOrLows,
-      entry,
-      isLong ? "long" : "short"
-    );
-
-    const tpRR = isLong ? entry + risk * 2 : entry - risk * 2;
-    const stop = refOpen;
-
-    // --- 文字輸出 ---
-    out += isLong
-      ? `\n✅ 建議買入價位：約 ${entry.toFixed(prec)} `
-      : `\n🔻 建議賣出價位：約 ${entry.toFixed(prec)} `;
-    out += `\n   停損點：${stop.toFixed(prec)} `;
-    out += `\n🎯 分批目標價：`;
-
-    // --- TP lines array (黃色線) ---
-    window.aiTpLines = dense.map((d, i) => {
-      out += `\n   ▸ TP${i + 1}：${d.price.toFixed(prec)}（密集 ${d.freq} 次）`;
-      return { price: d.price, label: `TP${i + 1}`, color: "yellow" };
-    });
-
-    out += `\n   ▸ TP${dense.length + 1}：${tpRR.toFixed(prec)}（RR 1:2）`;
-    window.aiTpLines.push({
-      price: tpRR,
-      label: `TP${dense.length + 1} (RR)`,
-      color: "yellow"
-    });
+  if (chasing) {
+    out += `\n⚠️ 價格接近前高，小心追高風險。`;
   }
 
   return out;
 }
+
+/* =========================================================
+   📌 1. 這段貼在工具函式區
+   ========================================================= */
+function getZoneLines(candles) {
+  // 至少 50 根才分析，太少不準
+  if (!candles || candles.length < 50) return [];
+
+  const recent = candles.slice(-80);         // 取最近 80 根
+  const highs  = recent.map(c => c.high);
+  const lows   = recent.map(c => c.low);
+
+  // 近 15 根最高/最低當成壓力 / 支撐
+  const resistance = Math.max(...highs.slice(-15));
+  const support    = Math.min(...lows.slice(-15));
+
+  return [
+    { price: resistance, label: "🔺 壓力區", color: "#ff6666" },
+    { price: support,    label: "🔻 支撐區", color: "#66ccff" }
+  ];
+}
+
 
 
 
@@ -581,12 +583,15 @@ function updateSuggestionAndTPLines(allCandles) {
     box.style.display = markers.length ? "block" : "none";
   }
 
+  // 先清除所有舊線（TP線 + 壓力/支撐線）
   tpLineObjects.forEach(obj => obj?.remove?.());
   tpLineObjects = [];
 
+
+  // === 1️⃣ 畫出 TP 建議線 ===
   if (window.aiTpLines && Array.isArray(window.aiTpLines)) {
     const firstTime = allCandles[0]?.time ?? allCandles.at(-1).time - 86400;
-    const lastTime = allCandles.at(-1)?.time;
+    const lastTime  = allCandles.at(-1)?.time;
 
     window.aiTpLines.forEach(tp => {
       const series = chart.addLineSeries({
@@ -597,7 +602,7 @@ function updateSuggestionAndTPLines(allCandles) {
       });
       series.setData([
         { time: firstTime, value: tp.price },
-        { time: lastTime, value: tp.price }
+        { time: lastTime,  value: tp.price }
       ]);
       tpLineObjects.push(series);
 
@@ -611,6 +616,31 @@ function updateSuggestionAndTPLines(allCandles) {
       tpLineObjects.push(label);
     });
   }
+
+  // === 2️⃣ 畫出自動偵測的支撐與壓力區 ===
+  const zoneLines = getZoneLines(allCandles);
+  zoneLines.forEach(z => {
+    const series = chart.addLineSeries({
+      lineWidth: 1,
+      color: z.color,
+      priceLineVisible: false,
+      lastValueVisible: false
+    });
+    series.setData([
+      { time: allCandles[0].time,     value: z.price },
+      { time: allCandles.at(-1).time, value: z.price }
+    ]);
+    tpLineObjects.push(series);
+
+    const label = chart.addPriceLine({
+      price: z.price,
+      color: z.color,
+      lineWidth: 1,
+      axisLabelVisible: true,
+      title: z.label
+    });
+    tpLineObjects.push(label);
+  });
 }
 
 
