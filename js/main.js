@@ -16,105 +16,131 @@ let macdChart, macdLine, signalLine, histSeries;
 // 直接覆蓋原本整段 -----------------------------
 function detectCandlePatterns(candles, lookback = 10) {
   const markers = [];
-  const start = Math.max(candles.length - lookback, 2); // 至少2根起跳
-  const isBull = (c) => c.close > c.open;
-  const isBear = (c) => c.close < c.open;
-  const bodySize = (c) => Math.abs(c.close - c.open);
-  const range = (c) => c.high - c.low;
+  const start = Math.max(candles.length - lookback, 2);
+
+  const isBull = c => c.close > c.open;
+  const isBear = c => c.close < c.open;
+  const body   = c => Math.abs(c.close - c.open);
+  const wickU  = c => c.high - Math.max(c.open, c.close);
+  const wickL  = c => Math.min(c.open, c.close) - c.low;
+  const range  = c => c.high - c.low;
+  const mid    = c => (c.open + c.close) / 2;
 
   for (let i = start; i < candles.length; i++) {
     const c0 = candles[i - 2];
     const c1 = candles[i - 1];
     const c2 = candles[i];
 
-    const prev = c1;
-    const curr = c2;
+    const mark = (name, pos, color) => markers.push({
+      time: c2.time,
+      position: pos,
+      color,
+      shape: pos === 'belowBar' ? 'arrowUp' : 'arrowDown',
+      text: name
+    });
 
-    // === 吞噬 ===
-    const bullishEngulf =
-      isBear(prev) && isBull(curr) &&
-      curr.open <= prev.close && curr.close >= prev.open;
+    /* === 1. 吞噬 Engulfing（多空）===================== */
+    const bullEngulf =
+      isBear(c1) && isBull(c2) &&
+      c2.open <= c1.close && c2.close >= c1.open;
 
-    const bearishEngulf =
-      isBull(prev) && isBear(curr) &&
-      curr.open >= prev.close && curr.close <= prev.open;
+    const bearEngulf =
+      isBull(c1) && isBear(c2) &&
+      c2.open >= c1.close && c2.close <= c1.open;
 
-    // === 平頭 ===
-    const flatBottom = isBull(prev) && isBull(curr) &&
-      Math.abs(prev.low - curr.low) < range(curr) * 0.1;
+    if (bullEngulf) mark("多頭吞噬", "belowBar", "#26a69a");
+    if (bearEngulf) mark("空頭吞噬", "aboveBar", "#ef5350");
 
-    const flatTop = isBear(prev) && isBear(curr) &&
-      Math.abs(prev.high - curr.high) < range(curr) * 0.1;
+    /* === 2. 母子 Harami / Harami Cross =============== */
+    const insideBody =
+      c2.open > Math.min(c1.open, c1.close) &&
+      c2.close < Math.max(c1.open, c1.close);
 
-    // === 星形 ===
-    const morningStar = isBear(c0) && Math.abs(c1.close - c1.open) < range(c1) * 0.2 && isBull(c2) &&
-      c2.close > (c0.open + c0.close) / 2;
+    const isDoji  = body(c2) <= range(c2) * 0.1;
 
-    const eveningStar = isBull(c0) && Math.abs(c1.close - c1.open) < range(c1) * 0.2 && isBear(c2) &&
-      c2.close < (c0.open + c0.close) / 2;
+    if (isBear(c1) && isBull(c2) && insideBody)
+      mark("多頭母子", "belowBar", "#26a69a");
+    if (isBull(c1) && isBear(c2) && insideBody)
+      mark("空頭母子", "aboveBar", "#ef5350");
 
-    // === 三線 ===
-    const threeWhiteSoldiers =
+    if (isBear(c1) && isDoji && insideBody)
+      mark("多頭母子十字", "belowBar", "#26a69a");
+    if (isBull(c1) && isDoji && insideBody)
+      mark("空頭母子十字", "aboveBar", "#ef5350");
+
+    /* === 3. 貫穿 Piercing Line / Dark-Cloud Cover ==== */
+    const bullPiercing =
+      isBear(c1) && isBull(c2) &&
+      c2.open < c1.low &&                       // 跳空下開
+      c2.close > mid(c1) && c2.close < c1.open; // 收盤穿過 50% 但未超過開盤
+
+    const bearDarkCloud =
+      isBull(c1) && isBear(c2) &&
+      c2.open > c1.high &&                      // 跳空上開
+      c2.close < mid(c1) && c2.close > c1.open; // 收盤跌破 50% 但未低於開盤
+
+    if (bullPiercing)    mark("貫穿線",   "belowBar", "#26a69a");
+    if (bearDarkCloud)   mark("烏雲蓋頂", "aboveBar", "#ef5350");
+
+    /* === 4. 晨星 / 黃昏星 ============================ */
+    const isSmall = c => body(c) <= range(c) * 0.3;
+
+    const morningStar =
+      isBear(c0) && isSmall(c1) && isBull(c2) &&
+      c2.close >= mid(c0);
+
+    const eveningStar =
+      isBull(c0) && isSmall(c1) && isBear(c2) &&
+      c2.close <= mid(c0);
+
+    if (morningStar) mark("晨星", "belowBar", "#26a69a");
+    if (eveningStar) mark("夜星", "aboveBar",  "#ef5350");
+
+    /* === 5. 錘頭 / 吊人 / 流星 ======================= */
+    const longLower = wickL(c2) >= body(c2) * 2;
+    const longUpper = wickU(c2) >= body(c2) * 2;
+
+    if (longLower && wickU(c2) <= body(c2) * 0.4 && isBear(c1))
+      mark("錘頭線", "belowBar", "#26a69a");          // down-trend → bullish
+
+    if (longLower && wickU(c2) <= body(c2) * 0.4 && isBull(c1))
+      mark("吊人",   "aboveBar", "#ef5350");          // up-trend  → bearish
+
+    if (longUpper && wickL(c2) <= body(c2) * 0.4 && isBull(c1))
+      mark("流星",   "aboveBar", "#ef5350");          // shooting star 已有
+
+    /* === 6. 三兵 / 三鴉（原本已有）================== */
+    const threeWhite =
       isBull(candles[i - 3]) && isBull(candles[i - 2]) && isBull(candles[i - 1]) &&
       candles[i - 3].close < candles[i - 2].close &&
       candles[i - 2].close < candles[i - 1].close;
 
-    const threeBlackCrows =
+    const threeBlack =
       isBear(candles[i - 3]) && isBear(candles[i - 2]) && isBear(candles[i - 1]) &&
       candles[i - 3].close > candles[i - 2].close &&
       candles[i - 2].close > candles[i - 1].close;
 
-    // === 二陰一陽、二陽一陰 ===
-    const twoBearOneBull = isBear(candles[i - 2]) && isBear(candles[i - 1]) && isBull(candles[i]);
-    const twoBullOneBear = isBull(candles[i - 2]) && isBull(candles[i - 1]) && isBear(candles[i]);
+    if (threeWhite) mark("三白兵", "belowBar", "#26a69a");
+    if (threeBlack) mark("三烏鴉", "aboveBar", "#ef5350");
 
-    // === 十字星、影線型態（單K） ===
-    const realBody = bodySize(curr);
-    const upperShadow = curr.high - Math.max(curr.open, curr.close);
-    const lowerShadow = Math.min(curr.open, curr.close) - curr.low;
-    const isDoji = realBody < range(curr) * 0.1;
-    const isHammer = lowerShadow > realBody * 2 && upperShadow < realBody;
-    const isInvertedHammer = upperShadow > realBody * 2 && lowerShadow < realBody;
-    const isShootingStar = upperShadow > realBody * 2 && lowerShadow < realBody && isBear(curr);
-    const isGravestone = upperShadow > realBody * 2 && lowerShadow < range(curr) * 0.1 && isDoji;
-    const isDragonfly = lowerShadow > realBody * 2 && upperShadow < range(curr) * 0.1 && isDoji;
+    /* === 7. Tweezer Bottom / Top（原本的平頭）======= */
+    if (isBull(c1) && isBull(c2) && Math.abs(c1.low - c2.low) <= range(c2) * 0.1)
+      mark("平頭底部", "belowBar", "#26a69a");
 
-    // === 標記判斷 ===
-    const mark = (name, position, color) => {
-      markers.push({
-        time: curr.time,
-        position,
-        color,
-        shape: position === 'belowBar' ? 'arrowUp' : 'arrowDown',
-        text: name
-      });
-    };
+    if (isBear(c1) && isBear(c2) && Math.abs(c1.high - c2.high) <= range(c2) * 0.1)
+      mark("平頭頂部", "aboveBar", "#ef5350");
 
-    if (bullishEngulf) mark("多頭吞噬", "belowBar", "#26a69a");
-    if (bearishEngulf) mark("空頭吞噬", "aboveBar", "#ef5350");
+    /* === 8. 十字星、墓碑、T字（原本已有）============ */
+    const isDoji2 = body(c2) <= range(c2) * 0.1;
 
-    if (flatBottom) mark("平頭底部", "belowBar", "#26a69a");
-    if (flatTop) mark("平頭頂部", "aboveBar", "#ef5350");
-
-    if (morningStar) mark("早晨之星", "belowBar", "#26a69a");
-    if (eveningStar) mark("黃昏之星", "aboveBar", "#ef5350");
-
-    if (threeWhiteSoldiers) mark("三綠兵", "belowBar", "#26a69a");
-    if (threeBlackCrows) mark("三烏鴉", "aboveBar", "#ef5350");
-
-    if (twoBearOneBull) mark("二陰一陽", "belowBar", "#26a69a");
-    if (twoBullOneBear) mark("二陽一陰", "aboveBar", "#ef5350");
-
-    if (isDoji) mark("十字星", "aboveBar", "#999");
-    if (isHammer) mark("錘頭線", "belowBar", "#26a69a");
-    if (isInvertedHammer) mark("倒錘線", "belowBar", "#26a69a");
-    if (isShootingStar) mark("流星", "aboveBar", "#ef5350");
-    if (isGravestone) mark("墓碑線", "aboveBar", "#ef5350");
-    if (isDragonfly) mark("T字線", "belowBar", "#26a69a");
+    if (isDoji2)           mark("十字星", "aboveBar", "#999");
+    if (longUpper && isDoji2) mark("墓碑線", "aboveBar", "#ef5350");
+    if (longLower && isDoji2) mark("T字線", "belowBar", "#26a69a");
   }
 
   return markers;
 }
+
 
 function getDenseLevels(prices, entryPrice, direction = "long", stepPct = 0.005, keep = 3) {
   if (!Array.isArray(prices) || !prices.length) return [];
