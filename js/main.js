@@ -179,9 +179,10 @@ function generateAISuggestion(candles, markers) {
   const bodyStrong = bodyPct > 0.012;
   const isValidSetup = (bias === "偏多" && macdUp && bodyStrong) || (bias === "偏空" && !macdUp && bodyStrong);
 
-  const risk = Math.abs(entry - prev.open);
+  const stopLoss = bias === "偏多" ? prev.low : prev.high;
+  const risk = Math.abs(entry - stopLoss);
   const rrTarget = bias === "偏多" ? entry + risk * 2 : entry - risk * 2;
-  const stopLoss = prev.open;
+
 
   const highsOrLows = bias === "偏多"
     ? candles.slice(-221, -1).map(c => c.high)
