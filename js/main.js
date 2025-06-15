@@ -156,24 +156,20 @@ function fmt(price, precision) {
 function generateAISuggestion(candles, markers) {
   if (!candles.length) return "尚無價格資料";
 
-  // === 基本變數 ===
-  const latest     = candles.at(-1);          // 最新一根
-  const prev       = candles.at(-2) ?? latest;
-  const precision  = getPrecision(latest.close);
-  const entry      = latest.close;            // 直接用市價
-  const timeStr    = new Date(latest.time * 1000)
-                      .toLocaleString("zh-TW", { hour12: false });
+  const latest    = candles.at(-1);
+  const prev      = candles.at(-2) ?? latest;
+  const precision = getPrecision(latest.close);
+  const entry     = latest.close;
 
-  // === 近 3 根型態 → 多型態判定（>=2 同向才算） ===
-  const rawPatterns = markers.slice(-3)       // 取最近 3 筆標記
-                     .map(m => m?.text)
-                     .filter(Boolean);
+  const rawPatterns = markers.slice(-3)
+    .map(m => m?.text)
+    .filter(Boolean);
 
   const biasMap = {
-    "多頭吞噬": "偏多",   "空頭吞噬": "偏空",   "早晨之星": "偏多", "黃昏之星": "偏空",
-    "三綠兵":   "偏多",   "三烏鴉":   "偏空",   "錘頭線":   "偏多", "流星":     "偏空",
-    "墓碑線":   "偏空",   "T字線":   "偏多",   "倒錘線":   "偏多", "二陰一陽": "偏多",
-    "二陽一陰": "偏空",   "十字星":   "觀察",   "平頭頂部": "偏空", "平頭底部": "偏多"
+    "多頭吞噬": "偏多", "空頭吞噬": "偏空", "早晨之星": "偏多", "黃昏之星": "偏空",
+    "三綠兵": "偏多", "三烏鴉": "偏空", "錘頭線": "偏多", "流星": "偏空",
+    "墓碑線": "偏空", "T字線": "偏多", "倒錘線": "偏多", "二陰一陽": "偏多",
+    "二陽一陰": "偏空", "十字星": "觀察", "平頭頂部": "偏空", "平頭底部": "偏多"
   };
 
   let bull = 0, bear = 0;
@@ -187,70 +183,69 @@ function generateAISuggestion(candles, markers) {
   if (bear >= 2) bias = "偏空";
   else if (bull >= 2) bias = "偏多";
 
-  // === MACD 動能 ===
   const macd     = calcMACD(candles);
   const mNow     = macd.at(-1), mPrev = macd.at(-2);
   const macdUp   = mNow.macd > mNow.signal && mNow.macd > mPrev.macd;
   const macdSide = mNow.macd >= 0 ? "多方動能" : "空方動能";
 
-  // === K 棒實體百分比（>1.2% 才算有力道） ===
-  const bodyPct   = Math.abs(latest.close - latest.open) /
-                    ((latest.open + latest.close) / 2);
+  const bodyPct    = Math.abs(latest.close - latest.open) / ((latest.open + latest.close) / 2);
   const bodyStrong = bodyPct > 0.012;
 
-  // === 是否為有效進場條件 ===
   const isValidSetup =
     (bias === "偏多" && macdUp && bodyStrong) ||
     (bias === "偏空" && !macdUp && bodyStrong);
 
-  // === 停損（距離 >=4.5%；不足則用 4.5%） ===
   let rawSL;
   if (bias === "偏多") {
-    const need = entry * 0.955;            // 下方 4.5%
+    const need = entry * 0.955;
     rawSL = Math.min(prev.low, need);
   } else if (bias === "偏空") {
-    const need = entry * 1.045;            // 上方 4.5%
+    const need = entry * 1.045;
     rawSL = Math.max(prev.high, need);
   } else {
-    rawSL = bias === "觀察" ? entry : prev.high;
+    rawSL = entry;
   }
-  const stopLoss = Number(rawSL.toFixed(precision));
 
-  // === 風險 / RR 目標 ===
+  const stopLoss = Number(rawSL.toFixed(precision));
   const risk     = Math.abs(entry - stopLoss);
   const rrTarget = bias === "偏多" ? entry + risk * 2 : entry - risk * 2;
 
-  // === 近 220 根高低點 → TP 密集區搜尋（沿用原函式 getDenseLevels） ===
   const highsOrLows = bias === "偏多"
     ? candles.slice(-221, -1).map(c => c.high)
     : candles.slice(-221, -1).map(c => c.low);
 
   const dense = getDenseLevels(highsOrLows, entry, bias === "偏多" ? "long" : "short");
+
   window.aiTpLines = dense.map((d, i) => ({
     price: d.price,
     label: `TP${i + 1}`,
     color: "yellow"
   }));
   window.aiTpLines.push({
-    price : rrTarget,
-    label : `TP${dense.length + 1} (RR)`,
-    color : "yellow"
+    price: rrTarget,
+    label: `TP${dense.length + 1} (RR)`,
+    color: "yellow"
   });
 
-  // === 追高警示 ===
+  // ✅ FIBO 回測支撐區（使用近 30 根高低）
+  const fiboCandles = candles.slice(-30);
+  const fiboHigh    = Math.max(...fiboCandles.map(c => c.high));
+  const fiboLow     = Math.min(...fiboCandles.map(c => c.low));
+  const fibo0618    = fiboHigh - (fiboHigh - fiboLow) * 0.618;
+  const pullbackZone = fibo0618.toFixed(precision);
+
   const lastHigh = Math.max(...candles.slice(-10).map(c => c.high));
   const chasing  = bias === "偏多" && entry > lastHigh * 0.995;
 
-  // === 組合輸出 ===
   let out = `${bias === "觀察" ? "⚠️ 判斷：觀察" : (bias === "偏多" ? "📈 判斷：偏多" : "📉 判斷：偏空")}\n`;
   out += `📌 形態：${rawPatterns.length ? `「${rawPatterns.join("、")}」` : "無明顯形態"}\n`;
   out += `🔍 MACD：${macdSide}（${macdUp ? "上升" : "下降"}）\n`;
 
-  // 若無形態或不符合動能條件
-  if (!rawPatterns.length) return out + `⚠️ 未偵測到明確形態，建議觀察即可。`;
-  if (!isValidSetup)      return out + `⚠️ 雖有形態，但動能不足或實體過小，不建議操作。`;
+  if (!rawPatterns.length)
+    return out + `⚠️ 未偵測到明確形態，建議觀察即可。`;
+  if (!isValidSetup)
+    return out + `⚠️ 雖有形態，但動能不足或實體過小，不建議操作。`;
 
-  // === 有效進場訊號 ===
   out += `📌 建議價格：${entry.toFixed(precision)}（市價進場）\n`;
   out += `⛔ 停損位置：${stopLoss.toFixed(precision)}\n`;
   out += `🎯 分批出場：`;
@@ -262,7 +257,11 @@ function generateAISuggestion(candles, markers) {
     out += `\n🧭 建議：已形成空方結構，若已有空單可續抱。`;
     out += `\n📌 壓力區：${(entry + risk).toFixed(precision)} 附近`;
   } else if (bias === "偏多") {
-    out += `\n🧭 建議：等待回測或突破確認再進場，勿追高。`;
+    const tp1 = window.aiTpLines[0]?.price ?? (entry + risk);
+    out += `\n🧭 建議：請採以下其中一種進場方式：`;
+    out += `\n▸【回測進場】等待價格拉回至支撐區（如 ${pullbackZone}）並出現轉強形態（錘頭、吞噬等）再進場；`;
+    out += `\n▸【突破追多】等價格突破 TP1（${tp1.toFixed(precision)}）並站穩，再拉回確認時介入；`;
+    out += `\n⚠️ 避免直接在 ${entry.toFixed(precision)} 附近追高，風險較高。`;
   }
 
   if (chasing) {
@@ -271,6 +270,8 @@ function generateAISuggestion(candles, markers) {
 
   return out;
 }
+
+
 
 
 /* =========================================================
